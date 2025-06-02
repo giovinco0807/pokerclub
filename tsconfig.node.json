@@ -1,0 +1,20 @@
+// tsconfig.node.json (新規作成)
+{
+  "compilerOptions": {
+    "composite": true, // "references" を使う場合に必要
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler", // または "node"
+    "allowSyntheticDefaultImports": true,
+    "strict": true, // 必要に応じて調整
+    "noEmit": false, // Node.js環境用の設定なので、通常ビルド出力はしない
+    // Viteの設定ファイルが CommonJS の場合は以下を検討
+    // "module": "CommonJS",
+    // "moduleResolution": "node",
+    "declaration": true,
+    "emitDeclarationOnly": true, // JavaScriptファイルは出力せず、型定義ファイルのみ出力
+    "outDir": "dist-node" // 型定義ファイルの出力先 (任意、プロジェクトに合わせて)
+  },
+  "include": ["vite.config.ts"] // または vite.config.js (もしあれば)
+                                 // postcss.config.js, tailwind.config.js など、Node.js環境で読み込まれる設定ファイルも対象に含めることがある
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Copy of Hiroshima Poker Club App",
+  "description": "A web application for Hiroshima Poker Club members to manage their profile, chips, attendance, and orders. Includes a poker tip of the day feature powered by Gemini API.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
