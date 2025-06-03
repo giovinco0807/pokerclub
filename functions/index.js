@@ -20,11 +20,14 @@ exports.setAdminClaim = functions
     const callerUid = context.auth.uid;
     try {
       const callerUserRecord = await admin.auth().getUser(callerUid);
+      // 呼び出し元が管理者でない場合はエラー
       if (callerUserRecord.customClaims?.admin !== true) {
-        console.warn(`権限チェック: 呼び出し元 ${callerUid} は管理者ではありません。`);
+        throw new functions.https.HttpsError("permission-denied", "管理者権限が必要です。");
       }
     } catch (error) {
       console.error("呼び出し元の権限確認エラー:", error);
+      // permission-denied でない場合は internal エラー
+      if (error.code === "permission-denied") throw error;
       throw new functions.https.HttpsError("internal", "権限確認中にエラーが発生しました。");
     }
     const emailToMakeAdmin = data.email;
@@ -44,7 +47,6 @@ exports.setAdminClaim = functions
       throw new functions.https.HttpsError("internal", "管理者権限付与中にエラーが発生しました。");
     }
   });
-
 exports.autoSetAdminOnUserCreate = functions
   .region("asia-northeast1")
   .auth.user()
@@ -59,7 +61,6 @@ exports.autoSetAdminOnUserCreate = functions
     }
     return null;
   });
-
 exports.purchaseChips = functions
   .region("asia-northeast1")
   .https.onCall(async (data, context) => {
@@ -137,8 +138,8 @@ exports.checkInUserWithChips = functions
     const seatRef = db.collection("tables").doc(tableId).collection("seats").doc(String(seatNumber));
     const tableRefForSession = db.collection("tables").doc(tableId); // ★ テーブル情報取得用
 
+    let userDataForSession; // セッションログ用にユーザーデータを保持
     try {
-      let userDataForSession; // セッションログ用にユーザーデータを保持
       await db.runTransaction(async (transaction) => {
         const userDoc = await transaction.get(userRef);
         const seatDoc = await transaction.get(seatRef);
@@ -153,7 +154,7 @@ exports.checkInUserWithChips = functions
         transaction.update(userRef, {
           chips: admin.firestore.FieldValue.increment(-amountToPlay), chipsInPlay: admin.firestore.FieldValue.increment(amountToPlay),
           isCheckedIn: true, currentTableId: tableId, currentSeatNumber: seatNumber,
-          activeGameSessionId: null,
+          activeGameSessionId: null, // 新しいセッションIDを記録する前にクリア
           checkedInAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
         transaction.update(seatRef, {
@@ -167,12 +168,17 @@ exports.checkInUserWithChips = functions
       let gameTypePlayed = "Unknown";
       let ratePlayed = null;
       let tableNameForSession = tableId;
+      let minBuyInForSession = 0;
+      let maxBuyInForSession = 0;
+
 
       if (tableDoc.exists) {
         const tableData = tableDoc.data();
         gameTypePlayed = tableData.gameType || "Other"; // types.tsのGameName型を想定
-        ratePlayed = tableData.blindsOrRate || null;
-        tableNameForSession = tableData.name || tableId;
+        ratePlayed = tableData.blindsOrRate || null; //
+        tableNameForSession = tableData.name || tableId; //
+        minBuyInForSession = tableData.minBuyIn || 0;
+        maxBuyInForSession = tableData.maxBuyIn || 0;
       }
 
       const gameSessionRef = db.collection("gameSessions").doc(); // 新しいIDを生成
@@ -194,6 +200,8 @@ exports.checkInUserWithChips = functions
         durationMinutes: null,
         playFeeCalculated: null,
         playFeeAppliedToBill: false,
+        minBuyIn: minBuyInForSession, // セッション開始時のバイインを記録
+        maxBuyIn: maxBuyInForSession, // セッション開始時のバイインを記録
         // seasonId: getCurrentSeasonId(), // 必要に応じて現在のシーズンIDを取得するロジック
       });
       await userRef.update({ activeGameSessionId: gameSessionRef.id }); // ユーザーにアクティブなセッションIDを記録
@@ -212,7 +220,6 @@ exports.checkInUserWithChips = functions
 
 /**
  * 管理者によるチップ引き出し「提供済み」処理 (チップ移動を伴う)
- * ★ ゲームセッションログの開始記録を追加 ★
  * (この関数は、ユーザーが事前にチップ引き出しリクエストを出し、管理者がそれを承認・準備し、
  * 実際にチップを渡すタイミングで呼ばれることを想定)
  */
@@ -295,12 +302,17 @@ exports.dispenseApprovedChipsAndMarkAsDelivered = functions
         let gameTypePlayed = "Unknown";
         let ratePlayed = null;
         let tableNameForSession = tableIdForLog;
+        let minBuyInForSession = 0;
+        let maxBuyInForSession = 0;
+
 
         if (tableDocForSession.exists) {
           const tableDataForSession = tableDocForSession.data();
           gameTypePlayed = tableDataForSession.gameType || "Other";
           ratePlayed = tableDataForSession.blindsOrRate || null;
           tableNameForSession = tableDataForSession.name || tableIdForLog;
+          minBuyInForSession = tableDataForSession.minBuyIn || 0;
+          maxBuyInForSession = tableDataForSession.maxBuyIn || 0;
         }
 
         const gameSessionRef = db.collection("gameSessions").doc();
@@ -318,6 +330,8 @@ exports.dispenseApprovedChipsAndMarkAsDelivered = functions
           additionalChipsIn: 0,
           sessionEndTime: null, chipsOut: null, profit: null, durationMinutes: null,
           playFeeCalculated: null, playFeeAppliedToBill: false,
+          minBuyIn: minBuyInForSession,
+          maxBuyIn: maxBuyInForSession,
         });
         await db.collection("users").doc(userIdForLog).update({ activeGameSessionId: gameSessionRef.id });
         console.log(`ユーザー ${userIdForLog} の新しいゲームセッション ${gameSessionRef.id} をチップ引き出し承認時に開始。`);
@@ -341,13 +355,22 @@ exports.dispenseApprovedChipsAndMarkAsDelivered = functions
 exports.initiateChipSettlementByAdmin = functions
   .region("asia-northeast1")
   .https.onCall(async (data, context) => {
-    if (!context.auth) {/* ...認証エラー... */}
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "認証が必要です。");
+    }
     const callerUid = context.auth.uid;
-    const isAdminOrStaff = false; // ...権限チェック...
-    if (!isAdminOrStaff) {/* ...権限エラー... */}
+    let isAdminOrStaff = false;
+    try {
+      const callerUserRecord = await admin.auth().getUser(callerUid);
+      if (callerUserRecord.customClaims?.admin === true || callerUserRecord.customClaims?.staff === true) isAdminOrStaff = true;
+    } catch (error) {
+      console.error("権限確認エラー(initiateChipSettlementByAdmin):", error);
+      throw new functions.https.HttpsError("internal", "権限確認エラー。");
+    }
+    if (!isAdminOrStaff) throw new functions.https.HttpsError("permission-denied", "権限不足(管理者/スタッフ)。");
 
     const { userId, tableId, seatNumber, denominationsCount, totalAdminEnteredChips } = data;
-    if (!userId || !tableId || !Number.isInteger(seatNumber) || seatNumber < 0 || typeof denominationsCount !== "object" || denominationsCount === null || typeof totalAdminEnteredChips !== "number" || totalAdminEnteredChips < 0) {
+    if (!userId || typeof userId !== "string" || !tableId || typeof tableId !== "string" || !Number.isInteger(seatNumber) || seatNumber < 0 || typeof denominationsCount !== "object" || denominationsCount === null || typeof totalAdminEnteredChips !== "number" || totalAdminEnteredChips < 0) {
       throw new functions.https.HttpsError("invalid-argument", "入力データが無効です。");
     }
 
@@ -371,7 +394,11 @@ exports.initiateChipSettlementByAdmin = functions
       });
       console.log(`ユーザー ${userId} のチップ精算 (${totalAdminEnteredChips}チップ) をユーザー確認待ちに。T:${tableId}, S:${seatNumber}`);
       return { status: "success", message: "チップ精算をユーザー確認待ちに設定しました。" };
-    } catch (error) {/* ...エラー処理... */}
+    } catch (error) {
+      console.error(`チップ精算開始エラー (ID:${userId}):`, error);
+      if (error instanceof functions.https.HttpsError) throw error;
+      throw new functions.https.HttpsError("internal", "チップ精算開始処理中エラー。", error.message);
+    }
   });
 
 /**
@@ -455,16 +482,25 @@ exports.confirmAndFinalizeChipSettlement = functions
           if (durationMinutes !== null && durationMinutes > 0) {
             // --- ここにプレイ代計算ロジックを実装 ---
             // 例: 30分単位で課金、最初のN分は無料、ゲームタイプやレートで変動など
-            // const gameType = gameSessionData.gameTypePlayed;
-            // const rateInfo = gameSessionData.ratePlayed;
-            // if (gameType === "NLH" && rateInfo === "100/200") { ... }
-            // 例: 単純に30分ごとに500円
+            // GameSessionのデータを使って料金を計算する
+            const gameType = gameSessionData.gameTypePlayed;
+            const rateInfo = gameSessionData.ratePlayed;
+            const sessionMinBuyIn = gameSessionData.minBuyIn;
+            const sessionMaxBuyIn = gameSessionData.maxBuyIn;
+
+            // 例: 単純な時間課金 (30分ごとに500円)
             const feePerUnitTime = 500; // 単位時間あたりの料金
             const unitTimeMinutes = 30; // 単位時間(分)
             const freeMinutes = 0; // 無料時間(分)
+
             if (durationMinutes > freeMinutes) {
               playFeeAmount = Math.ceil((durationMinutes - freeMinutes) / unitTimeMinutes) * feePerUnitTime;
             }
+            // ゲームタイプやレートに応じた複雑な料金設定はここに追記
+            // if (gameType === "NLH" && rateInfo === "100/200") {
+            //   // 別の料金体系
+            // }
+
             if (playFeeAmount < 0) playFeeAmount = 0; // 念のため
             // --- プレイ代計算ロジックここまで ---
           }
@@ -511,4 +547,63 @@ exports.confirmAndFinalizeChipSettlement = functions
  */
 exports.finalizeDrinkOrderAndBill = functions
   .region("asia-northeast1")
-  .https.onCall(async (data, context) => {/* ... (ID 119 と同様) ... */});
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "認証が必要です。");
+    const userId = context.auth.uid;
+    const { orderId } = data;
+
+    if (!orderId || typeof orderId !== "string") {
+      throw new functions.https.HttpsError("invalid-argument", "注文IDが無効です。");
+    }
+
+    const orderRef = db.collection("orders").doc(orderId);
+    const userRef = db.collection("users").doc(userId);
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const orderDoc = await transaction.get(orderRef);
+        const userDoc = await transaction.get(userRef);
+
+        if (!orderDoc.exists) throw new functions.https.HttpsError("not-found", `注文 (ID: ${orderId}) が見つかりません。`);
+        if (!userDoc.exists) throw new functions.https.HttpsError("not-found", `ユーザー (ID: ${userId}) が見つかりません。`);
+
+        const orderData = orderDoc.data();
+        const userData = userDoc.data();
+
+        if (orderData.userId !== userId) throw new functions.https.HttpsError("permission-denied", "この注文はあなたのユーザーIDに紐付いていません。");
+        if (orderData.orderStatus !== "delivered_awaiting_confirmation") throw new functions.https.HttpsError("failed-precondition", `注文ステータスが「提供済み(ユーザー確認待ち)」ではありません。(現在のステータス: ${orderData.orderStatus})`);
+
+        const totalOrderPrice = orderData.totalOrderPrice || 0;
+        const currentBill = userData.bill || 0;
+
+        // ドリンク注文の場合はbillに加算し、チップ購入は既にpurchaseChipsで処理されているので、ここで再加算しない
+        let billIncrementAmount = 0;
+        orderData.items.forEach((item) => {
+          if (item.itemType === "drink") {
+            billIncrementAmount += item.totalItemPrice;
+          }
+        });
+
+        // 支払い残高に加算 (ドリンク分のみ)
+        transaction.update(userRef, {
+          bill: currentBill + billIncrementAmount,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // 注文ステータスを「完了」に更新
+        transaction.update(orderRef, {
+          orderStatus: "completed",
+          customerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+      console.log(`ユーザー ${userId} の注文 ${orderId} が完了しました。`);
+      return { status: "success", message: "注文の受け取りを確定しました。" };
+    } catch (error) {
+      console.error(`注文確定処理エラー (注文ID: ${orderId}, ユーザーID: ${userId}):`, error);
+      if (error instanceof functions.https.HttpsError) throw error;
+      throw new functions.https.HttpsError("internal", "注文確定処理中にエラー。", error.message);
+    }
+  });

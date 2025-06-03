@@ -12,10 +12,16 @@
       ],
       "runtime": "nodejs18",
       "predeploy": [
-        
         "npm --prefix \"%RESOURCE_DIR%\" run lint --if-present"
-        
       ]
     }
-  ]
+  ],
+  "hosting": {
+    "public": "src/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  }
 }

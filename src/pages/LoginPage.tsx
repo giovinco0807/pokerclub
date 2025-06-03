@@ -70,14 +70,14 @@ const LoginPage: React.FC = () => {
           <input
             id="birthDate"
             type="password" // 入力文字を隠すために type="password" を使用
-            placeholder="例: 19960807"
+            placeholder="例: 19990101"
             value={birthDate}
             onChange={(e) => setBirthDate(e.target.value)}
             required // 入力必須
             minLength={8} // バリデーションのため
             maxLength={8} // バリデーションのため
             pattern="\d{8}" // 数字8桁のパターン (HTML5バリデーション)
-            title="生年月日を8桁の数字で入力してください（例: 19960807）" // パターンエラー時のメッセージ
+            title="生年月日を8桁の数字で入力してください（例: 19990101）" // パターンエラー時のメッセージ
             className="w-full p-2 bg-slate-800 text-white border border-slate-700 rounded focus:ring-red-500 focus:border-red-500 focus:bg-slate-700 placeholder-gray-500"
           />
         </div>

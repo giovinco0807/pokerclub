@@ -114,7 +114,7 @@ const App: React.FC = () => {
           </Routes>
         </main>
         <footer className="text-center p-4 text-sm text-neutral-light">
-          © {new Date().getFullYear()} Hiroshima Poker Club. 全著作権所有。
+          © {new Date().getFullYear()} Hiroshima Poker Club.
         </footer>
       </div>
     </HashRouter>

@@ -9,7 +9,7 @@ import type { UserDetailsModalProps } from '../components/admin/UserDetailsModal
 import SeatSelectionModal from '../components/admin/SeatSelectionModal';
 import type { SeatSelectionModalProps } from '../components/admin/SeatSelectionModal'; 
 import ChipSettlementModal from '../components/admin/ChipSettlementModal';
-import type { ChipSettlementModalProps } from '../components/admin/ChipSettlementModal'; // ChipSettlementModalPropsもインポート
+import type { ChipSettlementModalProps } from '../components/admin/ChipSettlementModal';
 import { UserData, UserWithId, Table, Seat } from '../types';
 import { getAllTables, getSeatsForTable } from '../services/tableService';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -143,67 +143,142 @@ const AdminUserManagementPage: React.FC = () => {
     setIsSeatSelectionModalOpen(true); 
   };
   
-  const handleSeatUser = async (targetUser: UserWithId, tableId: string, seatNumber: number, amountToPlayInput?: number) => {
-    if (!currentUser?.uid) { alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); return; }
-    
-    let chipsToPlay: number; 
-    const currentOwnedChips = targetUser.chips ?? 0; 
-
-    if (amountToPlayInput === undefined || typeof amountToPlayInput !== 'number' || amountToPlayInput < 0) {
-        const currentChipsInPlay = targetUser.chipsInPlay ?? 0;
-        const defaultChipAmountStr = String(currentChipsInPlay > 0 ? currentChipsInPlay : (currentOwnedChips > 20000 ? 20000 : (currentOwnedChips >=0 ? currentOwnedChips : 0) ));
-        const amountStr = window.prompt(
-          `${targetUser.pokerName || targetUser.email} さんをテーブル ${tableId} の座席 ${seatNumber} に着席させます。\n持ち込むチップ額を入力してください (現在の保有チップ: ${currentOwnedChips.toLocaleString()}):`, 
-          defaultChipAmountStr
-        );
-        if (amountStr === null) { alert("着席処理をキャンセルしました。"); return; }
-        const amount = parseInt(amountStr, 10);
-        if (isNaN(amount) || amount < 0) { alert("無効なチップ額です。0以上の数値を入力してください。"); return; }
-        if (amount > currentOwnedChips) { 
-            alert(`保有チップ(${currentOwnedChips.toLocaleString()})を超える額は持ち込めません。`); 
-            return; 
-        }
-        chipsToPlay = amount;
-    } else {
-        chipsToPlay = amountToPlayInput;
+  const handleSeatUser = async (targetUser: UserWithId, newTableId: string, newSeatNumber: number, amountToPlayInput?: number) => {
+    if (!currentUser?.uid) { 
+      alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); 
+      return; 
     }
-    
-    const loadingKey = `seat-${targetUser.id}`;
-    setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
+    if (!targetUser || !targetUser.id) {
+        alert("エラー: 対象ユーザー情報が不完全です。");
+        return;
+    }
+
+    const loadingKeyForSeatAction = `seat-${targetUser.id}`; 
+    setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: true }));
+
     try {
-        const functions = getFunctions(undefined, 'asia-northeast1');
-        const checkInFn = httpsCallable<
-            { userId: string; tableId: string; seatNumber: number; amountToPlay: number; },
-            { status: string; message: string; }
-        >(functions, 'checkInUserWithChips');
+      const previousTableId = targetUser.currentTableId;
+      let previousTableInfo: Table | undefined;
 
-        const result = await checkInFn({
-            userId: targetUser.id,
-            tableId: tableId,
-            seatNumber: seatNumber,
-            amountToPlay: chipsToPlay, 
-        });
+      if (targetUser.isCheckedIn && previousTableId) { 
+        previousTableInfo = tables.find(t => t.id === previousTableId);
+      }
 
-        if (result.data.status === 'success') {
-            alert(result.data.message || `${targetUser.pokerName || targetUser.email} さんを着席/チェックインさせました。`);
-            fetchUsers(); 
-            fetchAllTableDataWithSeats(); 
-            if (refreshCurrentUser && typeof refreshCurrentUser === 'function') refreshCurrentUser();
-        } else {
-            throw new Error(result.data.message || "着席処理でエラーが発生しました。");
+      const destinationTableInfo = tables.find(t => t.id === newTableId);
+      if (!destinationTableInfo) {
+        throw new Error("移動先のテーブル情報が見つかりません。ページを再読み込みしてください。");
+      }
+
+      if (targetUser.isCheckedIn && targetUser.currentTableId === newTableId && targetUser.currentSeatNumber === newSeatNumber) {
+        alert("同じテーブルの同じ座席には移動できません。");
+        setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+        setIsSeatSelectionModalOpen(false); 
+        setUserForSeating(null);
+        return;
+      }
+
+      const needsSettlementDueToGameChange = previousTableInfo && targetUser.isCheckedIn &&
+        (previousTableInfo.gameType !== destinationTableInfo.gameType || 
+         previousTableInfo.blindsOrRate !== destinationTableInfo.blindsOrRate);
+
+      if (needsSettlementDueToGameChange) {
+        if (targetUser.pendingChipSettlement) {
+            alert(`ユーザー「${targetUser.pokerName || targetUser.email}」は既にチップ精算の確認待ちです。\nまずユーザー側の確認を完了させてください。`);
+            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+            setIsSeatSelectionModalOpen(false); 
+            setUserForSeating(null);
+            return;
         }
+
+        const confirmSettlement = window.confirm(
+          `ユーザー「${targetUser.pokerName || targetUser.email}」を異なるゲーム/レートのテーブルに移動します。\n` +
+          `現在のテーブル (${previousTableInfo?.name} - ${previousTableInfo?.gameType} ${previousTableInfo?.blindsOrRate || ''}) でのチップを一度精算する必要があります。\n` +
+          `チップ精算を開始しますか？\n(精算完了後、改めて新しいテーブルへの着席操作を行ってください)`
+        );
+
+        if (confirmSettlement) {
+          handleOpenChipSettlementModal(targetUser); 
+          setIsSeatSelectionModalOpen(false);      
+          setUserForSeating(null);
+          setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+          return; 
+        } else {
+          alert("テーブル移動をキャンセルしました。チップ精算が必要です。");
+          setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+          setIsSeatSelectionModalOpen(false); 
+          setUserForSeating(null);
+          return;
+        }
+      }
+      
+      let chipsToPlay: number; 
+      const currentOwnedChips = targetUser.chips ?? 0; 
+
+      if (amountToPlayInput === undefined || typeof amountToPlayInput !== 'number' || amountToPlayInput < 0) {
+          const currentChipsInPlay = targetUser.chipsInPlay ?? 0;
+          const defaultChipAmountStr = String( currentChipsInPlay > 0 && !targetUser.isCheckedIn ? 0 : 
+                                                currentChipsInPlay > 0 && targetUser.isCheckedIn ? currentChipsInPlay : 
+                                                (currentOwnedChips > 20000 ? 20000 : (currentOwnedChips >=0 ? currentOwnedChips : 0) ));
+          const amountStr = window.prompt(
+            `${targetUser.pokerName || targetUser.email} さんをテーブル ${destinationTableInfo.name} (座席 ${newSeatNumber}) に着席させます。\n持ち込むチップ額を入力してください (保有チップ: ${currentOwnedChips.toLocaleString()}):`, 
+            defaultChipAmountStr
+          );
+          if (amountStr === null) { 
+            alert("着席処理をキャンセルしました。"); 
+            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+            return; 
+          }
+          const amount = parseInt(amountStr, 10);
+          if (isNaN(amount) || amount < 0) { 
+            alert("無効なチップ額です。0以上の数値を入力してください。"); 
+            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+            return; 
+          }
+          if (amount > currentOwnedChips) { 
+              alert(`保有チップ(${currentOwnedChips.toLocaleString()})を超える額は持ち込めません。`); 
+              setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
+              return; 
+          }
+          chipsToPlay = amount;
+      } else {
+          chipsToPlay = amountToPlayInput;
+      }
+      
+      const functions = getFunctions(undefined, 'asia-northeast1');
+      const checkInFn = httpsCallable<
+          { userId: string; tableId: string; seatNumber: number; amountToPlay: number; },
+          { status: string; message: string; }
+      >(functions, 'checkInUserWithChips');
+
+      const result = await checkInFn({
+          userId: targetUser.id,
+          tableId: newTableId,
+          seatNumber: newSeatNumber,
+          amountToPlay: chipsToPlay, 
+      });
+
+      if (result.data.status === 'success') {
+          alert(result.data.message || `${targetUser.pokerName || targetUser.email} さんを着席/チェックインさせました。`);
+          fetchUsers(); 
+          fetchAllTableDataWithSeats(); 
+          if (refreshCurrentUser && typeof refreshCurrentUser === 'function') {
+            await refreshCurrentUser();
+          }
+      } else {
+          throw new Error(result.data.message || "着席処理でエラーが発生しました。");
+      }
     } catch (e: any) {
-        console.error("着席/チェックインエラー (AdminUserManagementPage):", e);
-        alert(`着席/チェックイン処理に失敗しました: ${e.message}`);
+        console.error("着席/テーブル移動エラー (AdminUserManagementPage):", e);
+        alert(`着席/テーブル移動処理に失敗しました: ${e.message}`);
     } finally {
-        setActionLoading(prev => ({ ...prev, [loadingKey]: false }));
+        setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
         setIsSeatSelectionModalOpen(false); 
         setUserForSeating(null);
     }
   };
 
   const handleOpenChipSettlementModal = (user: UserWithId) => {
-    if (!user.isCheckedIn || !user.currentTableId || typeof user.currentSeatNumber !== 'number') { // ★ typeofチェック追加
+    if (!user.isCheckedIn || !user.currentTableId || typeof user.currentSeatNumber !== 'number') { 
       alert("このユーザーはチェックインしていないか、テーブル/座席が不明です。");
       return;
     }
@@ -218,9 +293,18 @@ const AdminUserManagementPage: React.FC = () => {
   const handleSubmitChipSettlement = async (denominationsCount: { [key: string]: number }, totalChips: number) => {
     if (!userForChipSettlement || !userForChipSettlement.id || !userForChipSettlement.currentTableId || typeof userForChipSettlement.currentSeatNumber !== 'number') {
       alert("精算対象のユーザー、テーブルID、または座席番号の情報が不完全です。");
+      setIsSubmittingSettlement(false); // ★ ローディング解除
+      if(userForChipSettlement?.id) { // ★ nullでないことを確認
+          setActionLoading(prev => ({ ...prev, [`settle-${userForChipSettlement!.id}`]: false })); 
+      }
       return;
     }
-    if (!currentUser?.uid) { alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); return;}
+    if (!currentUser?.uid) { 
+        alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); 
+        setIsSubmittingSettlement(false); // ★ ローディング解除
+        setActionLoading(prev => ({ ...prev, [`settle-${userForChipSettlement.id}`]: false })); // ★ ローディング解除
+        return;
+    }
 
     setIsSubmittingSettlement(true);
     const loadingKey = `settle-${userForChipSettlement.id}`;
@@ -234,27 +318,42 @@ const AdminUserManagementPage: React.FC = () => {
       >(functions, 'initiateChipSettlementByAdmin');
 
       const result = await initiateSettlementFn({
-        userId: userForChipSettlement.id,
-        tableId: userForChipSettlement.currentTableId,
-        seatNumber: userForChipSettlement.currentSeatNumber, // ここは number 型
+        userId: userForChipSettlement.id, 
+        tableId: userForChipSettlement.currentTableId, 
+        seatNumber: userForChipSettlement.currentSeatNumber, 
         denominationsCount: denominationsCount,
         totalAdminEnteredChips: totalChips,
       });
-
-      if (result.data.status === 'success') {
-        alert("チップ精算リクエストをユーザー確認待ちにしました。ユーザー側の確認後、チップ残高と状態が更新されます。");
-        setIsChipSettlementModalOpen(false); 
-        setUserForChipSettlement(null);     
-        fetchUsers();                       
-        if (refreshCurrentUser && typeof refreshCurrentUser === 'function') {
-            await refreshCurrentUser(); 
-        }
-      } else {
-        throw new Error(result.data.message || "チップ精算開始処理でエラーが発生しました。");
+      if (result && result.data && typeof result.data.status === 'string') {
+    if (result.data.status === 'success') {
+      alert(result.data.message || "チップ精算リクエストをユーザー確認待ちにしました。");
+      setIsChipSettlementModalOpen(false); 
+      setUserForChipSettlement(null);     
+      fetchUsers();                       
+      if (refreshCurrentUser && typeof refreshCurrentUser === 'function') {
+          await refreshCurrentUser(); 
       }
-    } catch (e: any) {
-      console.error("チップ精算開始エラー (AdminUserManagementPage):", e);
-      alert(`チップ精算の開始に失敗しました: ${e.message}`);
+    } else {
+      // Functionが status !== 'success' だが、期待したデータ構造で返した場合
+      console.error("チップ精算開始処理エラー (Function Response):", result.data);
+      throw new Error(result.data.message || "チップ精算開始処理でサーバーがエラーを返しました。");
+    }
+  } else {
+    // result.data が期待した形でない場合 (例: CORSエラーでレスポンスが空、Functionがクラッシュしたなど)
+    console.error("Firebase Functionからのレスポンスが無効、またはデータがありません:", result);
+    throw new Error("サーバーからの応答が無効か、データがありませんでした。FunctionのログやCORS設定を確認してください。");
+  }
+} catch (e: any) {
+  console.error("チップ精算開始エラー (AdminUserManagementPage):", e);
+  let errorMessage = `チップ精算の開始に失敗しました。`;
+  if (e?.message) { // e や e.message が存在するか確認
+    errorMessage += ` (${e.message})`;
+  }
+  // Firebase HttpsError の場合、e.code や e.details を含めることも検討
+  if (e?.code) {
+    errorMessage += ` (コード: ${e.code})`;
+  }
+  alert(errorMessage);
     } finally {
       setIsSubmittingSettlement(false);
       setActionLoading(prev => ({ ...prev, [loadingKey]: false }));
@@ -343,14 +442,29 @@ const AdminUserManagementPage: React.FC = () => {
                     <td className="px-3 py-3 whitespace-nowrap text-sm text-sky-300 text-right">{(user.chipsInPlay ?? 0).toLocaleString()}</td>
                     <td className="px-3 py-3 whitespace-nowrap text-xs font-medium space-x-1">
                       {user.approved && !user.isCheckedIn && !user.pendingChipSettlement && (
-                        <button onClick={(e) => { e.stopPropagation(); openSeatSelectionModal(user); }} title="着席/チェックイン" className="text-sky-400 hover:text-sky-300 disabled:opacity-50 p-1" disabled={actionLoading[`seat-${user.id}`]}>
-                          {actionLoading[`seat-${user.id}`] ? "処理中" : "着席"}
+                        <button onClick={(e) => { e.stopPropagation(); openSeatSelectionModal(user); }} title="着席/チェックイン" className="text-sky-400 hover:text-sky-300 disabled:opacity-50 p-1" disabled={actionLoading[`seat-${user.id}`] || actionLoading[`move-${user.id}`]}>
+                          {actionLoading[`seat-${user.id}`] || actionLoading[`move-${user.id}`] ? "処理中..." : "着席"}
                         </button>
                       )}
-                      {user.isCheckedIn && !user.pendingChipSettlement && (
-                        <button onClick={(e) => { e.stopPropagation(); handleOpenChipSettlementModal(user); }} title="チップ精算を開始する" className="text-amber-400 hover:text-amber-300 disabled:opacity-50 p-1" disabled={actionLoading[`settle-${user.id}`]}>
-                          {actionLoading[`settle-${user.id}`] ? "処理中" : "精算開始"}
-                        </button>
+                      {user.approved && user.isCheckedIn && !user.pendingChipSettlement && (
+                        <>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); openSeatSelectionModal(user); }} 
+                            title="座席を移動する" 
+                            className="text-yellow-400 hover:text-yellow-300 disabled:opacity-50 p-1"
+                            disabled={actionLoading[`move-${user.id}`] || actionLoading[`seat-${user.id}`]}
+                          >
+                            {actionLoading[`move-${user.id}`] || actionLoading[`seat-${user.id}`] ? "処理中..." : "座席移動"}
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleOpenChipSettlementModal(user); }} 
+                            title="チップ精算を開始する" 
+                            className="text-amber-500 hover:text-amber-400 disabled:opacity-50 p-1" 
+                            disabled={actionLoading[`settle-${user.id}`]}
+                          >
+                            {actionLoading[`settle-${user.id}`] ? "処理中..." : "精算開始"}
+                          </button>
+                        </>
                       )}
                       {user.pendingChipSettlement && (
                         <span className="text-purple-400 italic text-xs">ユーザー確認待ち</span>
@@ -388,7 +502,7 @@ const AdminUserManagementPage: React.FC = () => {
           targetUser={userForSeating}
           currentTables={tables}
           isLoadingTables={loadingTables}
-          needsChipInput={true} // ★ SeatSelectionModalProps で定義されていることを確認
+          needsChipInput={true} 
         />
       )}
       {userForChipSettlement && (

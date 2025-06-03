@@ -10,6 +10,7 @@ export const CATEGORY_OPTIONS = ["ソフトドリンク", "アルコール", "�
 export type CategoryTuple = typeof CATEGORY_OPTIONS;
 export type Category = CategoryTuple[number];
 
+// チップ金種の定義
 export interface ChipDenomination {
   value: number; 
   label: string; 
@@ -24,6 +25,10 @@ export const DEFAULT_CHIP_DENOMINATIONS: ChipDenomination[] = [
   { value: 100, label: '100P' },
   { value: 25, label: '25P' },
 ];
+
+// ゲーム名の型と選択肢 (TableData と GameSession で使用)
+export type GameName = "NLH" | "PLO" | "MIX" | "Blackjack" | "Baccarat" | "Other";
+export const GAME_NAME_OPTIONS: GameName[] = ["NLH", "PLO", "MIX", "Blackjack", "Baccarat", "Other"];
 
 // --- User & Auth 関連 ---
 export interface UserData {
@@ -59,9 +64,7 @@ export interface UserData {
   pendingAvatarUrl?: string | null;
   avatarApproved?: boolean; 
   avatarApprovalStatus?: 'pending' | 'approved' | 'rejected' | null;
-  
-  // ★★★ 現在アクティブなゲームセッションのIDを追加 ★★★
-  activeGameSessionId?: string | null; 
+  activeGameSessionId?: string | null; // 現在アクティブなゲームセッションのID
 }
 
 export interface UserWithId extends UserData {
@@ -199,17 +202,14 @@ export interface Seat extends SeatData {
   id: string;
 }
 
-// ★★★ GameName 型と GAME_NAME_OPTIONS 定数を TableData より前に定義 ★★★
-export type GameName = "NLH" | "PLO" | "MIX" | "Blackjack" | "Baccarat" | "Other";
-export const GAME_NAME_OPTIONS: GameName[] = ["NLH", "PLO", "MIX", "Blackjack", "Baccarat", "Other"];
-
 export interface TableData {
-  name: string;
+  tableNumber?: string; // テーブル番号 (例: "A", "1")
+  name: string; // テーブル名 (例: "メインフロア テーブルA")
   maxSeats: number;
   status?: TableStatus;
-  gameType?: GameName | string; // GameName 型または自由入力   
-  blindsOrRate?: string | null;   // テンプレートからコピー、または直接入力
-  currentGameTemplateId?: string | null; 
+  gameType?: GameName | string; // GameName型または自由入力の"Other"
+  blindsOrRate?: string | null; // 例: "100/200", "Min Bet 1000"
+  currentGameTemplateId?: string | null; // 適用されているゲームテンプレートのID
   minBuyIn?: number;
   maxBuyIn?: number;
   createdAt?: Timestamp;
@@ -223,16 +223,15 @@ export interface Table extends TableData {
 // --- Game Template & Game Session 関連 (ランキング機能用) ---
 export interface GameTemplate {
   id?: string;
-  templateName: string;
-  gameType: GameName;
-  rateOrMinBet?: string | null;
+  templateName: string;       // 管理者が識別するためのテンプレート名
+  gameType: GameName;         // ゲームの種類
+  rateOrMinBet?: string | null; // 実際のレート文字列やベット情報
   description?: string;
   isActive: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
 
-// ★★★ GameSession 型の定義 ★★★
 export interface GameSession {
   id?: string;                    
   userId: string;                 
@@ -242,14 +241,14 @@ export interface GameSession {
   tableName?: string;              
   seatNumber: number;             
   
-  gameTypePlayed: GameName | string; 
-  ratePlayed?: string | null;         
+  gameTypePlayed: GameName | string; // セッション開始時のテーブルのゲームタイプ
+  ratePlayed?: string | null;         // セッション開始時のテーブルのレート/ブラインド
   
   sessionStartTime: Timestamp;    
   sessionEndTime?: Timestamp | null; 
   
-  chipsIn: number;                
-  additionalChipsIn?: number;    // セッション中の追加引き出し総額 (デフォルト0)
+  chipsIn: number;                // このセッションへの最初の持ち込みチップ額
+  additionalChipsIn?: number;    // セッション中の追加引き出しチップ総額 (デフォルト0)
   totalChipsIn: number;           // chipsIn + (additionalChipsIn || 0)
   
   chipsOut?: number | null;        
@@ -262,7 +261,6 @@ export interface GameSession {
 
   seasonId?: string | null;        // シーズンID (ランキング用)
 }
-// ★★★ ここまで ★★★
 
 // --- Announcement 関連 ---
 export interface StoreAnnouncement {
