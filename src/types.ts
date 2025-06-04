@@ -226,17 +226,17 @@ export interface Table extends TableData {
 
 // --- Game Template & Game Session & Waiting List 関連 ---
 export interface GameTemplate {
-  id?: string;
-  templateName: string;
-  gameType: GameName;
-  blindsOrRate?: string | null;
-  description?: string;
-  minPlayers?: number;
-  maxPlayers?: number; // 1テーブルあたりの最大人数
-  estimatedDurationMinutes?: number;
-  notesForUser?: string;
-  isActive: boolean; // このテンプレートでウェイティングを受け付けるか
-  sortOrder?: number;
+  id?: string;                 // Firestore document ID
+  templateName: string;       // 管理者が識別するためのテンプレート名
+  gameType: GameName;         // ゲームの種類
+  blindsOrRate?: string | null; // ★★★ フィールド名を blindsOrRate に修正 ★★★
+  description?: string;        // ゲームの説明 (任意)
+  minPlayers?: number;         // ★★★ 追加 ★★★
+  maxPlayers?: number;         // ★★★ 追加 ★★★
+  estimatedDurationMinutes?: number; // ★★★ 追加 ★★★
+  notesForUser?: string;       // ★★★ 追加 ★★★
+  isActive: boolean;          // このテンプレートでウェイティングリストを現在アクティブにするか
+  sortOrder?: number;          // ★★★ 追加 ★★★
   createdAt?: Timestamp | Date;
   updatedAt?: Timestamp | Date;
 }

@@ -190,7 +190,7 @@ const AdminTableManagementPage: React.FC = () => {
         ...prev,
         currentGameTemplateId: templateId,
         gameType: selectedTemplate.gameType,
-        blindsOrRate: selectedTemplate.rateOrMinBet,
+        blindsOrRate: selectedTemplate.blindsOrRate,
         // minBuyIn, maxBuyIn は GameTemplate に定義されていないので直接操作しない
         // もしGameTemplateに含めるなら、ここに追加する
       }));
@@ -294,7 +294,7 @@ const AdminTableManagementPage: React.FC = () => {
   const getGameTemplateInfo = (templateId: string | null | undefined) => { // ★引数の型を修正
     if (!templateId) return '未設定';
     const template = gameTemplates.find(gt => gt.id === templateId);
-    return template ? `${template.templateName} (${template.gameType} / ${template.rateOrMinBet || 'N/A'})` : '不明';
+    return template ? `${template.templateName} (${template.gameType} / ${template.blindsOrRate || 'N/A'})` : '不明';
   };
   
   const formatTimestamp = (timestamp?: Timestamp | Date): string => {
@@ -450,7 +450,7 @@ const AdminTableManagementPage: React.FC = () => {
               </MenuItem>
               {gameTemplates.map((template) => (
                 <MenuItem key={template.id} value={template.id}>
-                  {template.templateName} ({template.gameType} / {template.rateOrMinBet || 'N/A'})
+                  {template.templateName} ({template.gameType} / {template.blindsOrRate || 'N/A'})
                 </MenuItem>
               ))}
             </Select>

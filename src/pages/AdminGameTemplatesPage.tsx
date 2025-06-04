@@ -5,7 +5,7 @@ import {
   TableContainer, TableHead, TableRow, Paper, IconButton, Dialog,
   DialogTitle, DialogContent, DialogActions, TextField, Switch,
   FormControlLabel, Box, MenuItem, Select, InputLabel, FormControl,
-  Grid // Grid をインポート
+  Grid
 } from '@mui/material';
 import { Add, Edit, Delete, Loop as LoopIcon } from '@mui/icons-material';
 import { SelectChangeEvent } from '@mui/material/Select';
@@ -22,6 +22,61 @@ import { StatusBadge } from '../components/admin/UserDetailsModal';
 
 const gameTemplatesCollectionRef = collection(db, 'gameTemplates');
 
+// ★★★ MUIフォーム要素用の共通スタイル定義 ★★★
+const formComponentStyles = {
+  label: { // InputLabel用
+    color: 'slate.400', // Tailwindのslate-400に近い色
+    '&.Mui-focused': {
+      color: 'sky.400',   // フォーカス時のラベル色 (Tailwindのsky-400)
+    },
+  },
+  inputBase: { // TextFieldのInputPropsやSelectのsx用
+    color: 'neutral.lightest',     // 入力文字の色 (白に近い)
+    backgroundColor: 'slate.700', // 背景色 (Tailwindのslate-700)
+    '& .MuiOutlinedInput-notchedOutline': {
+      borderColor: 'slate.600', // 通常時のボーダー
+    },
+    '&:hover .MuiOutlinedInput-notchedOutline': {
+      borderColor: 'slate.500', // ホバー時のボーダー
+    },
+    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+      borderColor: 'sky.500',   // フォーカス時のボーダー
+    },
+    // Selectのアイコンの色
+    '& .MuiSelect-icon': {
+        color: 'slate.400',
+    }
+  },
+  menuPaper: { // Selectのドロップダウンメニュー用
+    bgcolor: 'slate.700',
+    color: 'neutral.lightest',
+    border: '1px solid',
+    borderColor: 'slate.600',
+    '& .MuiMenuItem-root:hover': {
+      backgroundColor: 'slate.600',
+    },
+  },
+  switchControl: { // Switch用
+    '& .MuiSwitch-switchBase.Mui-checked': {
+      color: 'indigo.500', // ONの時の色
+    },
+    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+      backgroundColor: 'indigo.500', // ONの時のトラックの色
+    },
+    // 必要に応じてOFFの時のスタイルも追加
+    '& .MuiSwitch-switchBase': {
+        color: 'slate.500', // OFFの時の色
+      },
+    '& .MuiSwitch-track': {
+        backgroundColor: 'slate.600', // OFFの時のトラックの色
+    },
+  },
+  formControlLabel: { // FormControlLabelのテキスト用
+    color: 'slate.300',
+  }
+};
+
+
 const AdminGameTemplatesPage: React.FC = () => {
   const { currentUser, loading: appContextLoading } = useAppContext();
   const [gameTemplates, setGameTemplates] = useState<GameTemplate[]>([]);
@@ -37,9 +92,9 @@ const AdminGameTemplatesPage: React.FC = () => {
     gameType: GAME_NAME_OPTIONS[0],
     blindsOrRate: '',
     description: '',
-    minPlayers: 2,
-    maxPlayers: 9,
-    estimatedDurationMinutes: 60,
+    minPlayers: undefined,
+    maxPlayers: undefined,
+    estimatedDurationMinutes: undefined,
     notesForUser: '',
     isActive: true,
     sortOrder: 0,
@@ -48,7 +103,6 @@ const AdminGameTemplatesPage: React.FC = () => {
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState<{[key: string]: boolean}>({});
 
-
   const fetchGameTemplates = useCallback(async () => {
     setLoadingData(true); setError(null);
     try {
@@ -56,13 +110,11 @@ const AdminGameTemplatesPage: React.FC = () => {
       const snapshot = await getDocs(q);
       const fetchedTemplates = snapshot.docs.map(docSnapshot => {
         const data = docSnapshot.data();
-        const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate() : undefined;
-        const updatedAt = data.updatedAt instanceof Timestamp ? data.updatedAt.toDate() : undefined;
         return {
           id: docSnapshot.id,
           ...data,
-          createdAt,
-          updatedAt,
+          createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate() : data.updatedAt,
         } as GameTemplate;
       });
       setGameTemplates(fetchedTemplates);
@@ -109,26 +161,25 @@ const AdminGameTemplatesPage: React.FC = () => {
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value, type } = e.target;
+    const { name, value } = e.target;
     const isNumericField = ['minPlayers', 'maxPlayers', 'estimatedDurationMinutes', 'sortOrder'].includes(name);
-    
     let processedValue: string | number | undefined = value;
     if (isNumericField) {
         processedValue = value === '' ? undefined : Number(value);
-        if (value !== '' && isNaN(Number(value))) {
+        if (value !== '' && isNaN(Number(processedValue))) {
             return;
         }
     }
-    setCurrentTemplate(prev => ({ ...prev, [name]: processedValue, }));
+    setCurrentTemplate(prev => ({ ...prev, [name]: processedValue }));
   };
 
   const handleSelectChange = (event: SelectChangeEvent<GameName>) => {
     const { name, value } = event.target;
-    setCurrentTemplate(prev => ({ ...prev, [name as string]: value as GameName, }));
+    setCurrentTemplate(prev => ({ ...prev, [name as string]: value as GameName }));
   };
 
   const handleSwitchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentTemplate(prev => ({ ...prev, isActive: event.target.checked, }));
+    setCurrentTemplate(prev => ({ ...prev, isActive: event.target.checked }));
   };
 
   const handleSubmit = async () => {
@@ -138,24 +189,24 @@ const AdminGameTemplatesPage: React.FC = () => {
     }
     setIsFormSubmitting(true); setFormError(null);
 
-    const dataToSave: Partial<Omit<GameTemplate, 'id'| 'createdAt' | 'updatedAt'>> & {createdAt?: any, updatedAt?: any} = {
+    const dataToSave: Omit<GameTemplate, 'id' | 'createdAt' | 'updatedAt'> = {
       templateName: currentTemplate.templateName.trim(),
       gameType: currentTemplate.gameType,
       blindsOrRate: currentTemplate.blindsOrRate?.trim() || undefined,
       description: currentTemplate.description?.trim() || '',
-      minPlayers: currentTemplate.minPlayers !== undefined && !isNaN(Number(currentTemplate.minPlayers)) ? Number(currentTemplate.minPlayers) : undefined,
-      maxPlayers: currentTemplate.maxPlayers !== undefined && !isNaN(Number(currentTemplate.maxPlayers)) ? Number(currentTemplate.maxPlayers) : undefined,
-      estimatedDurationMinutes: currentTemplate.estimatedDurationMinutes !== undefined && !isNaN(Number(currentTemplate.estimatedDurationMinutes)) ? Number(currentTemplate.estimatedDurationMinutes) : undefined,
+      minPlayers: currentTemplate.minPlayers !== undefined && !isNaN(currentTemplate.minPlayers) ? Number(currentTemplate.minPlayers) : undefined,
+      maxPlayers: currentTemplate.maxPlayers !== undefined && !isNaN(currentTemplate.maxPlayers) ? Number(currentTemplate.maxPlayers) : undefined,
+      estimatedDurationMinutes: currentTemplate.estimatedDurationMinutes !== undefined && !isNaN(currentTemplate.estimatedDurationMinutes) ? Number(currentTemplate.estimatedDurationMinutes) : undefined,
       notesForUser: currentTemplate.notesForUser?.trim() || '',
       isActive: currentTemplate.isActive === undefined ? true : currentTemplate.isActive,
-      sortOrder: currentTemplate.sortOrder !== undefined && !isNaN(Number(currentTemplate.sortOrder)) ? Number(currentTemplate.sortOrder) : 0,
+      sortOrder: currentTemplate.sortOrder !== undefined && !isNaN(currentTemplate.sortOrder) ? Number(currentTemplate.sortOrder) : 0,
     };
 
     try {
       if (isEditing && currentTemplate.id) {
         const templateDocRef = doc(db, 'gameTemplates', currentTemplate.id);
         await updateDoc(templateDocRef, {
-          ...dataToSave,
+          ...(dataToSave as Partial<GameTemplate>),
           updatedAt: serverTimestamp(),
         });
         alert('ゲームテンプレートを更新しました。');
@@ -179,8 +230,8 @@ const AdminGameTemplatesPage: React.FC = () => {
 
   const handleDelete = async (id: string | undefined, templateName?: string) => {
     if (!id) { console.error("削除対象のIDがありません。"); return; }
-    if (!window.confirm(`テンプレート「${templateName || id}」を本当に削除しますか？`)) return;
-    
+    if (!window.confirm(`テンプレート「${templateName || id}」を本当に削除しますか？この操作は元に戻せません。`)) return;
+
     const loadingKey = `delete-${id}`;
     setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
     setError(null);
@@ -201,7 +252,6 @@ const AdminGameTemplatesPage: React.FC = () => {
     const date = timestamp instanceof Timestamp ? timestamp.toDate() : timestamp;
     return date.toLocaleString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
-
 
   if (appContextLoading) {
     return <AdminLayout><Container maxWidth="lg" sx={{ mt: 4 }}><Typography className="text-center text-xl text-neutral-lightest">アプリ情報読込中...</Typography></Container></AdminLayout>;
@@ -247,9 +297,9 @@ const AdminGameTemplatesPage: React.FC = () => {
                 <TableRow>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>テンプレート名</TableCell>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>タイプ</TableCell>
-                  <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>レート/MinBet</TableCell>
+                  <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>レート/ブラインド</TableCell>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold', minWidth:120 }}>最小/最大人数</TableCell>
-                  <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>受付</TableCell>
+                  <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>受付状態</TableCell>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>表示順</TableCell>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold', minWidth:150 }}>説明</TableCell>
                   <TableCell sx={{ color: 'slate.300', fontWeight: 'bold' }}>最終更新</TableCell>
@@ -270,10 +320,10 @@ const AdminGameTemplatesPage: React.FC = () => {
                     <TableCell sx={{ color: 'slate.400', borderBottomColor: 'slate.700', maxWidth: 200, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}>{template.description || '-'}</TableCell>
                     <TableCell sx={{ color: 'slate.400', borderBottomColor: 'slate.700', fontSize: '0.75rem' }}>{formatDisplayTimestamp(template.updatedAt)}</TableCell>
                     <TableCell sx={{ borderBottomColor: 'slate.700' }}>
-                      <IconButton size="small" sx={{color: 'sky.400', '&:hover': {color: 'sky.300'}}} onClick={() => handleOpenEditDialog(template)} disabled={actionLoading[template.id!]}>
+                      <IconButton size="small" sx={{color: 'sky.400', '&:hover': {color: 'sky.300'}}} onClick={() => handleOpenEditDialog(template)} disabled={!!actionLoading[template.id!]}>
                         <Edit fontSize="small"/>
                       </IconButton>
-                      <IconButton size="small" sx={{color: 'red.400', '&:hover': {color: 'red.300'}}} onClick={() => handleDelete(template.id, template.templateName)} disabled={actionLoading[template.id!]}>
+                      <IconButton size="small" sx={{color: 'red.400', '&:hover': {color: 'red.300'}}} onClick={() => handleDelete(template.id, template.templateName)} disabled={!!actionLoading[template.id!]}>
                         {actionLoading[template.id!] ? <LoopIcon className="animate-spin" fontSize="small"/> : <Delete fontSize="small"/>}
                       </IconButton>
                     </TableCell>
@@ -291,30 +341,29 @@ const AdminGameTemplatesPage: React.FC = () => {
           <DialogContent dividers sx={{ py: 3, bgcolor: 'slate.800' }}>
             {formError && <Typography color="error" sx={{ mb: 2, bgcolor: 'red.900', p:1, borderRadius:1, fontSize: '0.875rem' }}>{formError}</Typography>}
             <Box component="form" noValidate autoComplete="off" className="space-y-4">
-              <TextField fullWidth label="テンプレート名 *" name="templateName" value={currentTemplate.templateName || ''} onChange={handleInputChange} required InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
-              <FormControl fullWidth>
-                <InputLabel id="gameType-label-dialog" sx={{color: 'slate.400'}}>ゲームタイプ *</InputLabel>
-                <Select labelId="gameType-label-dialog" name="gameType" value={currentTemplate.gameType || ''} label="ゲームタイプ *" onChange={handleSelectChange} sx={{color:'white', bgcolor:'slate.700', '.MuiOutlinedInput-notchedOutline': {borderColor: 'slate.600'}, '&.Mui-focused .MuiOutlinedInput-notchedOutline': {borderColor: 'red.500'}, '.MuiSvgIcon-root': {color: 'slate.400'}}} MenuProps={{ PaperProps: { sx: { bgcolor: 'slate.700', color: 'white' } } }}>
-                  {GAME_NAME_OPTIONS.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}
+              <TextField fullWidth label="テンプレート名 *" name="templateName" value={currentTemplate.templateName || ''} onChange={handleInputChange} required InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
+              <FormControl fullWidth variant="outlined">
+                <InputLabel id="gameType-label-dialog" sx={formComponentStyles.label}>ゲームタイプ *</InputLabel>
+                <Select labelId="gameType-label-dialog" name="gameType" value={currentTemplate.gameType || ''} label="ゲームタイプ *" onChange={handleSelectChange} sx={formComponentStyles.inputBase} MenuProps={{ PaperProps: { sx: formComponentStyles.menuPaper } }}>
+                  {GAME_NAME_OPTIONS.map(option => <MenuItem key={option} value={option} sx={{ '&:hover': { backgroundColor: 'slate.600' } }}>{option}</MenuItem>)}
                 </Select>
               </FormControl>
-              <TextField fullWidth label="レート/MinBet (例: 100/200)" name="blindsOrRate" value={currentTemplate.blindsOrRate || ''} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
-              {/* ★★★ Grid コンポーネントの修正 ★★★ */}
+              <TextField fullWidth label="レート/ブラインド (例: 100/200)" name="blindsOrRate" value={currentTemplate.blindsOrRate || ''} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
               <Grid container spacing={2}>
-                <Grid item xs={6}> {/* item プロパティを削除し、Grid item を Grid コンポーネントに直接適用 */}
-                  <TextField fullWidth label="最小人数" name="minPlayers" type="number" value={currentTemplate.minPlayers === undefined ? '' : currentTemplate.minPlayers} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
+                <Grid item xs={6}>
+                  <TextField fullWidth label="最小人数" name="minPlayers" type="number" value={currentTemplate.minPlayers === undefined ? '' : currentTemplate.minPlayers} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
                 </Grid>
-                <Grid item xs={6}> {/* item プロパティを削除し、Grid item を Grid コンポーネントに直接適用 */}
-                  <TextField fullWidth label="最大人数" name="maxPlayers" type="number" value={currentTemplate.maxPlayers === undefined ? '' : currentTemplate.maxPlayers} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
+                <Grid item xs={6}>
+                  <TextField fullWidth label="最大人数" name="maxPlayers" type="number" value={currentTemplate.maxPlayers === undefined ? '' : currentTemplate.maxPlayers} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
                 </Grid>
               </Grid>
-              <TextField fullWidth label="想定プレイ時間(分)" name="estimatedDurationMinutes" type="number" value={currentTemplate.estimatedDurationMinutes === undefined ? '' : currentTemplate.estimatedDurationMinutes} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
-              <TextField fullWidth label="説明 (任意)" name="description" multiline rows={3} value={currentTemplate.description || ''} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
-              <TextField fullWidth label="ユーザー向け補足 (任意)" name="notesForUser" multiline rows={2} value={currentTemplate.notesForUser || ''} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
-              <TextField fullWidth label="表示順 (任意、小さいほど先)" name="sortOrder" type="number" value={currentTemplate.sortOrder === undefined ? '' : currentTemplate.sortOrder} onChange={handleInputChange} InputLabelProps={{ sx: {color: 'slate.400'} }} InputProps={{ sx:{color:'white', bgcolor:'slate.700'} }}/>
+              <TextField fullWidth label="想定プレイ時間(分)" name="estimatedDurationMinutes" type="number" value={currentTemplate.estimatedDurationMinutes === undefined ? '' : currentTemplate.estimatedDurationMinutes} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
+              <TextField fullWidth label="説明 (任意)" name="description" multiline rows={3} value={currentTemplate.description || ''} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
+              <TextField fullWidth label="ユーザー向け補足 (任意)" name="notesForUser" multiline rows={2} value={currentTemplate.notesForUser || ''} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
+              <TextField fullWidth label="表示順 (任意、小さいほど先)" name="sortOrder" type="number" value={currentTemplate.sortOrder === undefined ? '' : currentTemplate.sortOrder} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
               <FormControlLabel
-                control={<Switch checked={currentTemplate.isActive === undefined ? true : currentTemplate.isActive} onChange={handleSwitchChange} name="isActive" sx={{ '& .MuiSwitch-switchBase.Mui-checked': { color: 'indigo.500' }, '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { backgroundColor: 'indigo.500' } }} />}
-                label={<Typography sx={{color: 'slate.300'}}>ウェイティング受付中</Typography>}
+                control={<Switch checked={currentTemplate.isActive === undefined ? true : currentTemplate.isActive} onChange={handleSwitchChange} name="isActive" sx={formComponentStyles.switchControl} />}
+                label={<Typography sx={formComponentStyles.formControlLabel}>ウェイティング受付中</Typography>}
               />
             </Box>
           </DialogContent>
