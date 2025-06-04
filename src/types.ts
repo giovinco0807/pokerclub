@@ -12,9 +12,9 @@ export type Category = CategoryTuple[number];
 
 // チップ金種の定義
 export interface ChipDenomination {
-  value: number; 
-  label: string; 
-  color?: string; 
+  value: number;
+  label: string;
+  color?: string;
 }
 
 export const DEFAULT_CHIP_DENOMINATIONS: ChipDenomination[] = [
@@ -26,7 +26,7 @@ export const DEFAULT_CHIP_DENOMINATIONS: ChipDenomination[] = [
   { value: 25, label: '25P' },
 ];
 
-// ゲーム名の型と選択肢 (TableData と GameSession で使用)
+// ゲーム名の型と選択肢
 export type GameName = "NLH" | "PLO" | "MIX" | "Blackjack" | "Baccarat" | "Other";
 export const GAME_NAME_OPTIONS: GameName[] = ["NLH", "PLO", "MIX", "Blackjack", "Baccarat", "Other"];
 
@@ -38,10 +38,10 @@ export interface UserData {
   address?: string;
   phone?: string;
   birthDate?: string;
-  idFrontUrl?: string | null; 
+  idFrontUrl?: string | null;
   idBackUrl?: string | null;
-  chips: number; 
-  chipsInPlay: number; 
+  chips: number;
+  chipsInPlay: number;
   bill: number;
   isCheckedIn: boolean;
   approved: boolean;
@@ -50,36 +50,36 @@ export interface UserData {
   checkedOutAt?: Timestamp | Date;
   currentTableId?: string | null;
   currentSeatNumber?: number | null;
-  createdAt?: Timestamp;
+  createdAt?: Timestamp; // ★ 新規ユーザー登録時に設定
   updatedAt?: Timestamp;
   pendingChipSettlement?: {
     tableId: string;
     seatNumber: number;
     adminEnteredTotalChips: number;
     denominationsCount: { [denominationValue: string]: number };
-    initiatedBy: string; 
+    initiatedBy: string;
     initiatedAt: Timestamp;
   } | null;
   avatarUrl?: string | null;
   pendingAvatarUrl?: string | null;
-  avatarApproved?: boolean; 
-  avatarApprovalStatus?: 'pending' | 'approved' | 'rejected' | null;
-  activeGameSessionId?: string | null; // 現在アクティブなゲームセッションのID
-  
-  // ★追加: 支払い履歴追跡用
-  latestPaymentTimestamp?: Timestamp | null;
-  latestPaymentAmount?: number | null;
+  avatarApproved?: boolean;
+  avatarApprovalStatus?: 'pending' | 'approved' | 'rejected' | null | ""; // "" も許容
+  activeGameSessionId?: string | null;
+
+  // ★ 会計ボタン関連で追加 ★
+  lastPaymentType?: string; // 例: 'cash_admin_reset'
+  lastPaymentAt?: Timestamp;
 }
 
 export interface UserWithId extends UserData {
   id: string;
-  isAdminClientSide?: boolean;
+  isAdminClientSide?: boolean; // クライアント側での判定用 (カスタムクレームとは別)
 }
 
 export interface AppUser extends FirebaseUser {
   firestoreData?: UserData;
   isAdmin?: boolean;
-  isStaffClaim?: boolean; 
+  isStaffClaim?: boolean;
 }
 
 // --- Menu & Order 関連 ---
@@ -109,7 +109,7 @@ export interface ChipPurchaseOption {
 }
 
 interface BaseCartItem {
-  id: string; 
+  id: string;
   name: string;
   price: number;
   quantity: number;
@@ -127,22 +127,23 @@ export interface CartChipItem extends BaseCartItem {
 export type CartItem = CartDrinkItem | CartChipItem;
 
 export interface OrderItemData {
-  itemId: string; 
+  itemId: string;
   itemName: string;
   itemCategory?: Category;
-  chipsAmount?: number;   
+  chipsAmount?: number;
   quantity: number;
   unitPrice: number;
   totalItemPrice: number;
   itemType: 'drink' | 'chip';
 }
 
-export type OrderStatus = 
-  | "pending"                          
-  | "preparing"                        
-  | "delivered_awaiting_confirmation"  
-  | "completed"                        
-  | "cancelled";                       
+export type OrderStatus =
+  | "pending"
+  | "preparing"
+  | "delivered_awaiting_confirmation"
+  | "completed"
+  | "cancelled"
+  | "failed"; // 失敗ステータスも追加
 
 export interface Order {
   id?: string;
@@ -151,17 +152,17 @@ export interface Order {
   userEmail?: string;
   items: OrderItemData[];
   totalOrderPrice: number;
-  orderStatus: OrderStatus; 
+  orderStatus: OrderStatus;
   orderedAt: Timestamp;
-  adminProcessedAt?: Timestamp; 
-  adminDeliveredAt?: Timestamp;   
-  customerConfirmedAt?: Timestamp; 
-  completedAt?: Timestamp;        
-  notes?: string;                 
-  tableNumber?: string;
-  seatNumber?: string;
-  updatedAt?: Timestamp;          
-  paymentDetails?: {              
+  adminProcessedAt?: Timestamp;
+  adminDeliveredAt?: Timestamp;
+  customerConfirmedAt?: Timestamp;
+  completedAt?: Timestamp;
+  notes?: string;
+  tableNumber?: string; // 以前のテーブル番号 (文字列型)
+  seatNumber?: string;  // 以前の座席番号 (文字列型)
+  updatedAt?: Timestamp;
+  paymentDetails?: {
     chipPurchaseStatus?: "success" | "failed" | "pending";
     chipsAwarded?: number;
     chipsPriceYen?: number;
@@ -171,11 +172,11 @@ export interface Order {
 }
 
 export type WithdrawalRequestStatus =
-  | "pending_approval"                
-  | "approved_preparing"              
-  | "delivered_awaiting_confirmation" 
-  | "completed"                       
-  | "denied";                         
+  | "pending_approval"
+  | "approved_preparing"
+  | "delivered_awaiting_confirmation"
+  | "completed"
+  | "denied";
 
 export interface WithdrawalRequest {
   id?: string;
@@ -188,7 +189,7 @@ export interface WithdrawalRequest {
   adminProcessedAt?: Timestamp;
   adminDeliveredAt?: Timestamp;
   customerConfirmedAt?: Timestamp;
-  processedBy?: string;
+  processedBy?: string; // 管理者/スタッフのUID
   notes?: string;
   updatedAt?: Timestamp;
 }
@@ -199,71 +200,102 @@ export interface SeatData {
   userId: string | null;
   userPokerName: string | null;
   occupiedAt?: Timestamp | null;
-  status?: "occupied" | "empty" | "reserved";
-  currentStack?: number; 
+  status?: "occupied" | "empty" | "reserved"; // "reserved" も追加
+  currentStack?: number;
 }
 export interface Seat extends SeatData {
-  id: string;
+  id: string; // 座席番号をIDとして使用する場合 string
 }
 
 export interface TableData {
-  tableNumber?: string; // テーブル番号 (例: "A", "1")
-  name: string; // テーブル名 (例: "メインフロア テーブルA")
+  name: string;
   maxSeats: number;
   status?: TableStatus;
-  gameType?: GameName | string; // GameName型または自由入力の"Other"
-  blindsOrRate?: string | null; // 例: "100/200", "Min Bet 1000"
+  gameType?: GameName | string; // GameTemplateが設定されていればそれが優先される
+  blindsOrRate?: string | null; // GameTemplateが設定されていればそれが優先される
   currentGameTemplateId?: string | null; // 適用されているゲームテンプレートのID
-  minBuyIn?: number;
-  maxBuyIn?: number;
-  createdAt?: Timestamp | Date; // ★ここを修正
-  updatedAt?: Timestamp | Date; // ★ここを修正
+  minBuyIn?: number; // GameTemplateからコピー、または手動設定
+  maxBuyIn?: number; // GameTemplateからコピー、または手動設定
+  createdAt?: Timestamp | Date; // Date型も許容 (Firestoreから取得時はTimestamp)
+  updatedAt?: Timestamp | Date; // Date型も許容
 }
 export interface Table extends TableData {
   id: string;
-  seats?: Seat[]; 
+  seats?: Seat[];
 }
 
-// --- Game Template & Game Session 関連 (ランキング機能用) ---
+// --- Game Template & Game Session & Waiting List 関連 ---
 export interface GameTemplate {
   id?: string;
-  templateName: string;       // 管理者が識別するためのテンプレート名
-  gameType: GameName;         // ゲームの種類
-  rateOrMinBet?: string | null; // 実際のレート文字列やベット情報
+  templateName: string;
+  gameType: GameName;
+  blindsOrRate?: string | null;
   description?: string;
-  isActive: boolean;
-  createdAt?: Timestamp | Date;       // ★ここを修正
-  updatedAt?: Timestamp | Date;       // ★ここを修正
+  minPlayers?: number;
+  maxPlayers?: number; // 1テーブルあたりの最大人数
+  estimatedDurationMinutes?: number;
+  notesForUser?: string;
+  isActive: boolean; // このテンプレートでウェイティングを受け付けるか
+  sortOrder?: number;
+  createdAt?: Timestamp | Date;
+  updatedAt?: Timestamp | Date;
 }
 
+export type WaitingListEntryStatus = "waiting" | "called" | "seated" | "cancelled_by_user" | "cancelled_by_admin" | "no_show";
+
+export interface WaitingListEntry {
+  id?: string; // Firestore document ID
+  userId: string;
+  userPokerNameSnapshot?: string; // 登録時のポーカーネーム (表示用)
+  gameTemplateId: string;
+  requestedAt: Timestamp;
+  status: WaitingListEntryStatus;
+  notes?: string;          // ユーザーからの備考
+  adminNotes?: string;     // 管理者からの備考
+  calledAt?: Timestamp;    // 呼び出し日時
+  seatedAt?: Timestamp;    // 着席日時 (実際にテーブルに着席した日時)
+  cancelledAt?: Timestamp; // キャンセル日時
+  callCount?: number;      // 呼び出し回数
+}
+
+// ウェイティングリスト表示用にユーザー情報を付加した型
+export interface WaitingListEntryWithUser extends WaitingListEntry {
+  user?: UserWithId; // ユーザーの詳細情報 (任意で含める)
+  isCurrentUserCheckedIn?: boolean; // ★ ウェイティングリスト表示調整用 ★
+}
+
+
 export interface GameSession {
-  id?: string;                    
-  userId: string;                 
-  userPokerName?: string;        
-  
-  tableId: string;                
-  tableName?: string;              
-  seatNumber: number;             
-  
-  gameTypePlayed: GameName | string; // セッション開始時のテーブルのゲームタイプ
-  ratePlayed?: string | null;         // セッション開始時のテーブルのレート/ブラインド
-  
-  sessionStartTime: Timestamp;    
-  sessionEndTime?: Timestamp | null; 
-  
-  chipsIn: number;                // このセッションへの最初の持ち込みチップ額
-  additionalChipsIn?: number;    // セッション中の追加引き出しチップ総額 (デフォルト0)
-  totalChipsIn: number;           // chipsIn + (additionalChipsIn || 0)
-  
-  chipsOut?: number | null;        
-  profit?: number | null;          // chipsOut - totalChipsIn
-  
-  durationMinutes?: number | null; 
+  id?: string;
+  userId: string;
+  userPokerName?: string;
 
-  playFeeCalculated?: number | null; 
-  playFeeAppliedToBill?: boolean;  // プレイ代が会計に加算済みか (デフォルトfalse)
+  tableId: string;
+  tableName?: string;
+  seatNumber: number;
 
-  seasonId?: string | null;        // シーズンID (ランキング用)
+  gameTypePlayed: GameName | string;
+  ratePlayed?: string | null;
+
+  sessionStartTime: Timestamp;
+  sessionEndTime?: Timestamp | null;
+
+  chipsIn: number;
+  additionalChipsIn?: number;
+  totalChipsIn: number;
+
+  chipsOut?: number | null;
+  profit?: number | null;
+
+  durationMinutes?: number | null;
+
+  playFeeCalculated?: number | null;
+  playFeeAppliedToBill?: boolean;
+
+  minBuyIn?: number; // セッション開始時のテーブルの最小バイイン
+  maxBuyIn?: number; // セッション開始時のテーブルの最大バイイン
+
+  seasonId?: string | null;
 }
 
 // --- Announcement 関連 ---
@@ -275,8 +307,8 @@ export interface StoreAnnouncement {
   link?: string;
   isPublished: boolean;
   sortOrder?: number;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
+  createdAt: Timestamp; // FirestoreのTimestamp型を期待
+  updatedAt: Timestamp; // FirestoreのTimestamp型を期待
 }
 
 // --- Functions Response Types ---
