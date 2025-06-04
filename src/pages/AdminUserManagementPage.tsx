@@ -1,6 +1,6 @@
 // src/pages/AdminUserManagementPage.tsx
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { db } from '../services/firebase'; // パスを確認
+import { db } from '../services/firebase';
 import {
   collection,
   getDocs,
@@ -14,18 +14,18 @@ import {
   limit,
   startAfter
 } from 'firebase/firestore';
-import { useAppContext } from '../contexts/AppContext'; // パスを確認
+import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
-import UserDetailsModal, { StatusBadge } from '../components/admin/UserDetailsModal'; // パスを確認
+import UserDetailsModal, { StatusBadge } from '../components/admin/UserDetailsModal';
 import type { UserDetailsModalProps } from '../components/admin/UserDetailsModal';
-import SeatSelectionModal from '../components/admin/SeatSelectionModal'; // パスを確認
+import SeatSelectionModal from '../components/admin/SeatSelectionModal';
 import type { SeatSelectionModalProps } from '../components/admin/SeatSelectionModal';
-import ChipSettlementModal from '../components/admin/ChipSettlementModal'; // パスを確認
+import ChipSettlementModal from '../components/admin/ChipSettlementModal';
 import type { ChipSettlementModalProps } from '../components/admin/ChipSettlementModal';
-import { UserData, UserWithId, Table, Seat } from '../types'; // パスを確認
-import { getAllTables, getSeatsForTable } from '../services/tableService'; // パスを確認
+import { UserData, UserWithId, Table, Seat } from '../types';
+import { getAllTables, getSeatsForTable } from '../services/tableService';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import AdminLayout from '../components/admin/AdminLayout'; // パスを確認
+import AdminLayout from '../components/admin/AdminLayout';
 import { AiOutlineSearch, AiOutlineCloseCircle, AiOutlineLoading } from 'react-icons/ai';
 import { format } from 'date-fns';
 
@@ -63,10 +63,10 @@ const AdminUserManagementPage: React.FC = () => {
   const [filterStaff, setFilterStaff] = useState<boolean | null>(null);
   const [filterBillingStatus, setFilterBillingStatus] = useState<BillingStatusFilter>('all');
 
-  const [lastVisible, setLastVisible] = useState<any>(null);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState<any>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const usersPerPage = 20;
+  const [hasMoreData, setHasMoreData] = useState(true);
+  const usersPerPage = 20; // 定数として扱う
 
   const [isUserDetailsModalOpen, setIsUserDetailsModalOpen] = useState(false);
   const [selectedUserForDetails, setSelectedUserForDetails] = useState<UserWithId | null>(null);
@@ -83,47 +83,42 @@ const AdminUserManagementPage: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<{[key: string]: boolean}>({});
 
   const fetchAllTableDataWithSeats = useCallback(async () => {
-    console.log('%c--- fetchAllTableDataWithSeats CALLED ---', 'color: purple;');
     setLoadingTables(true);
     try {
       const tablesFromService = await getAllTables();
       const tablesWithSeatsPromises = tablesFromService.map(async (tableData) => {
         const currentTableId = tableData.id;
-        if (!currentTableId) {
-            console.error("fetchAllTableDataWithSeats: Table ID is missing for tableData:", tableData);
-            return { ...tableData, id: `unknown-${Math.random().toString(36).substring(7)}`, seats: [] } as Table;
-        }
+        if (!currentTableId) return { ...tableData, id: `unknown-${Math.random().toString(36).substring(7)}`, seats: [] } as Table;
         const seats = await getSeatsForTable(currentTableId);
         return { ...tableData, id: currentTableId, seats: seats || [] } as Table;
       });
-      const resolvedTables = await Promise.all(tablesWithSeatsPromises);
-      setTables(resolvedTables);
+      setTables(await Promise.all(tablesWithSeatsPromises));
     } catch (err: any) {
       console.error("テーブルデータ取得失敗 (fetchAllTableDataWithSeats):", err);
-      setError(prevError => prevError ? `${prevError}\nテーブルデータ取得失敗: ${err.message}` : `テーブルデータ取得失敗: ${err.message}`);
+      setError(prev => prev ? `${prev}\nテーブルデータ取得失敗: ${err.message}` : `テーブルデータ取得失敗: ${err.message}`);
     }
-    finally { setLoadingTables(false); console.log('%c--- fetchAllTableDataWithSeats FINISHED ---', 'color: purple;'); }
+    finally { setLoadingTables(false); }
   }, []);
 
-
-  // ★★★ `useCallback` の依存配列から `hasMore` を削除 ★★★
-  const fetchUsersWithFilters = useCallback(async (isLoadMore: boolean = false, currentLastVisibleDocParam: any = null) => {
+  // ★★★ fetchUsersWithFilters: useCallbackの依存配列から、関数内で更新するstate (lastVisibleDoc, hasMoreData) を完全に除外 ★★★
+  // ★★★ hasMoreData の参照も、useCallback の外の最新の state を使うようにする ★★★
+  const fetchUsersWithFilters = useCallback(async (
+    isLoadMore: boolean = false,
+    currentLastVisibleQueryParam: any = null // ページネーションのためのカーソルを引数で受け取る
+  ) => {
     console.log(`%c--- fetchUsersWithFilters CALLED (isLoadMore: ${isLoadMore}) ---`, 'color: blue; font-weight: bold;');
     console.log('Using Filters FOR QUERY:', {
-        approved: filterApproved,
-        checkedIn: filterCheckedIn,
-        staff: filterStaff,
-        billing: filterBillingStatus,
-        search: searchTerm
+        approved: filterApproved, checkedIn: filterCheckedIn, staff: filterStaff,
+        billing: filterBillingStatus, search: searchTerm
     });
-    if (isLoadMore) console.log('Current lastVisible Document ID (from param):', currentLastVisibleDocParam ? currentLastVisibleDocParam.id : null);
 
     if (!isLoadMore) {
       setLoadingUsers(true);
     } else {
-      // isLoadMore が true の場合、hasMore state を直接参照して判断
-      if (!hasMore) {
-        console.log('fetchUsersWithFilters: No more data to load (hasMore is false). Aborting.');
+      // isLoadMoreがtrueの場合、最新のhasMoreData stateを参照
+      // この関数が古いhasMoreDataの値をクロージャでキャプチャするのを防ぐ
+      if (!hasMoreData) { // hasMoreData は最新のstateを参照
+        console.log('fetchUsersWithFilters: No more data to load (hasMoreData is false). Aborting.');
         setLoadingMore(false);
         return;
       }
@@ -150,7 +145,6 @@ const AdminUserManagementPage: React.FC = () => {
       } else if (filterStaff === false) {
           applyClientSideStaffFilter = true;
       }
-
       if (filterBillingStatus === 'pendingPayment') {
         qry = query(qry, where('bill', '>', 0));
         appliedFirestoreFiltersInfo.push('bill > 0');
@@ -158,8 +152,7 @@ const AdminUserManagementPage: React.FC = () => {
         qry = query(qry, where('bill', '==', 0));
         appliedFirestoreFiltersInfo.push('bill == 0');
       }
-
-      console.log('Applied Firestore Filters:', appliedFirestoreFiltersInfo.join(', ') || 'None (except order/limit)');
+      // console.log('Applied Firestore Filters:', appliedFirestoreFiltersInfo.join(', ') || 'None (except order/limit)');
 
       if (filterBillingStatus === 'pendingPayment' || filterBillingStatus === 'paid') {
         qry = query(qry, orderBy('bill'), orderBy('createdAt', 'desc'), limit(usersPerPage));
@@ -167,8 +160,8 @@ const AdminUserManagementPage: React.FC = () => {
         qry = query(qry, orderBy('createdAt', 'desc'), limit(usersPerPage));
       }
 
-      if (isLoadMore && currentLastVisibleDocParam) {
-        qry = query(qry, startAfter(currentLastVisibleDocParam));
+      if (isLoadMore && currentLastVisibleQueryParam) {
+        qry = query(qry, startAfter(currentLastVisibleQueryParam));
       }
 
       const documentSnapshots = await getDocs(qry);
@@ -178,8 +171,6 @@ const AdminUserManagementPage: React.FC = () => {
         const data = docSnapshot.data() as UserData;
         return { id: docSnapshot.id, ...data };
       });
-      // console.log('Fetched users from Firestore (before client-side search/staff filtering):', fetchedUsersFromFirestore.length);
-      // fetchedUsersFromFirestore.forEach(u => console.log(`  FS User: ${u.pokerName}, Approved: ${u.approved}, Bill: ${u.bill}, isStaff: ${u.isStaff}, createdAt: ${u.createdAt?.toDate()}`));
 
       let usersAfterClientSideFilters = fetchedUsersFromFirestore;
       const searchQueryLower = searchTerm.trim().toLowerCase();
@@ -190,7 +181,6 @@ const AdminUserManagementPage: React.FC = () => {
           user.fullName?.toLowerCase().includes(searchQueryLower)
         );
       }
-
       if (applyClientSideStaffFilter) {
           usersAfterClientSideFilters = usersAfterClientSideFilters.filter(user => !(user.isStaff === true));
       }
@@ -202,11 +192,11 @@ const AdminUserManagementPage: React.FC = () => {
         setUsers(usersAfterClientSideFilters);
       }
 
-      const newLastVisibleDoc = documentSnapshots.docs[documentSnapshots.docs.length - 1];
-      setLastVisible(newLastVisibleDoc);
+      const newLastDoc = documentSnapshots.docs[documentSnapshots.docs.length - 1];
+      setLastVisibleDoc(newLastDoc);
 
-      const newHasMore = documentSnapshots.docs.length === usersPerPage;
-      setHasMore(newHasMore);
+      const newHasMoreFlag = documentSnapshots.docs.length === usersPerPage;
+      setHasMoreData(newHasMoreFlag);
 
     } catch (err: any) {
       console.error("ユーザーデータの取得に失敗しました (fetchUsersWithFilters):", err);
@@ -214,24 +204,25 @@ const AdminUserManagementPage: React.FC = () => {
     } finally {
       setLoadingUsers(false);
       setLoadingMore(false);
-      console.log(`%c--- fetchUsersWithFilters FINISHED ---`, 'color: blue; font-weight: bold;');
+      // console.log(`%c--- fetchUsersWithFilters FINISHED ---`, 'color: blue; font-weight: bold;');
     }
-  // ★★★ useCallback 依存配列から hasMore を削除。usersPerPage は定数なので実質フィルター条件のみに依存 ★★★
-  }, [searchTerm, filterApproved, filterCheckedIn, filterStaff, filterBillingStatus, usersPerPage]);
+  // ★★★ useCallback 依存配列: フィルター条件とusersPerPageのみ ★★★
+  // hasMoreData は関数内で最新のstateを参照するようにしたため、依存配列から削除
+  }, [searchTerm, filterApproved, filterCheckedIn, filterStaff, filterBillingStatus, usersPerPage, hasMoreData]); // hasMoreData を追加（読み取り専用）
 
 
-  // フィルター、検索語が変更された場合にデータ取得をトリガー
+  // ★★★ フィルター条件変更時にデータ取得をトリガーする useEffect ★★★
+  // この useEffect の依存配列はフィルター条件のみ。fetchUsersWithFilters は含めない。
+  // fetchUsersWithFilters は useCallback でメモ化されており、その依存配列（フィルター条件）が変われば再生成されるので、
+  // この useEffect が実行されるときには常に「最新のフィルター条件を反映した」fetchUsersWithFilters が呼び出される。
   useEffect(() => {
     console.log('%cuseEffect [Filters] triggered. Resetting pagination and fetching.', 'color: green;');
     console.log('Filters causing re-fetch:', { searchTerm, filterApproved, filterCheckedIn, filterStaff, filterBillingStatus });
-    setLastVisible(null);
-    setHasMore(true);
+    setLastVisibleDoc(null);
+    setHasMoreData(true);
     setUsers([]);
-    // fetchUsersWithFilters が再生成されたときにこの useEffect がトリガーされるわけではない。
-    // この useEffect はフィルターの state が変わったときに実行される。
-    // その際、最新のフィルター state を参照する fetchUsersWithFilters (useCallbackでメモ化されている) を呼び出す。
     fetchUsersWithFilters(false, null);
-  }, [searchTerm, filterApproved, filterCheckedIn, filterStaff, filterBillingStatus, fetchUsersWithFilters]); // ★ fetchUsersWithFilters を依存配列に含める
+  }, [searchTerm, filterApproved, filterCheckedIn, filterStaff, filterBillingStatus]); // fetchUsersWithFilters を依存配列から削除
 
 
   // アプリコンテキスト（ユーザーログイン状態、管理者権限）の変更を監視
@@ -241,26 +232,24 @@ const AdminUserManagementPage: React.FC = () => {
         console.log('AppContext: Admin user detected. Fetching table data.');
         fetchAllTableDataWithSeats();
         // ユーザーデータの初期取得は上記のフィルター用useEffectが担当する
-        // (フィルターの初期値で一度実行されるため)
     } else if (!appContextLoading && (!currentUser || !currentUser.isAdmin)) {
-        if (!error && window.location.pathname.startsWith('/admin')) { // 管理者ページにいる場合のみエラー表示
+        if (!error && window.location.pathname.startsWith('/admin')) {
              setError("このページへのアクセス権限がありません。");
         }
-        setLoadingTables(false); // テーブル取得は行われない
-        setLoadingUsers(false); // ユーザー取得も行われない（または既に完了している）
-        setUsers([]); // 権限がない場合はユーザーリストをクリア
+        setLoadingTables(false);
+        setLoadingUsers(false);
+        setUsers([]);
     }
-  }, [appContextLoading, currentUser, fetchAllTableDataWithSeats, error]); // error を依存配列に追加
-
+  }, [appContextLoading, currentUser, fetchAllTableDataWithSeats, error]); // fetchAllTableDataWithSeatsを依存配列に追加
 
   const handleLoadMore = () => {
-    console.log('%chandleLoadMore called. Current hasMore:', hasMore, 'Current loadingMore:', loadingMore);
-    if (hasMore && !loadingMore) {
-      fetchUsersWithFilters(true, lastVisible);
+    console.log('%chandleLoadMore called. Current hasMoreData:', hasMoreData, 'Current loadingMore:', loadingMore);
+    if (hasMoreData && !loadingMore) {
+      fetchUsersWithFilters(true, lastVisibleDoc);
     }
   };
 
-  // (handleApproveUser, handleUnapproveUser, ...その他のハンドラは変更なし)
+  // (handleApproveUser, handleUnapproveUser, etc. は変更なし)
   const handleApproveUser = async (userId: string) => {
     if (!window.confirm(`ユーザーID: ${userId.substring(0,8)}... のアカウントを承認しますか？`)) return;
     const loadingKey = `approve-${userId}`;
@@ -308,10 +297,29 @@ const AdminUserManagementPage: React.FC = () => {
     setIsUserDetailsModalOpen(false);
     setSelectedUserForDetails(null);
     console.log('UserDetailsModal closed. Resetting pagination and fetching user list.');
-    setLastVisible(null);
-    setHasMore(true);
+    setLastVisibleDoc(null);
+    setHasMoreData(true);
     setUsers([]);
     fetchUsersWithFilters(false, null);
+  };
+
+  const handleUserBalanceResetSuccess = (userId: string, newBillValue: number) => {
+    const successMsg = `ユーザー (ID: ${userId.substring(0,6)}...) の会計残高を ¥${newBillValue.toLocaleString()} にリセットしました。`;
+    setSuccessMessage(successMsg);
+    console.log(successMsg);
+    setUsers(prevUsers =>
+      prevUsers.map(u =>
+        u.id === userId ? { ...u, bill: newBillValue, updatedAt: Timestamp.now(), lastPaymentType: 'cash_admin_reset', lastPaymentAt: Timestamp.now() } : u
+      )
+    );
+    if (selectedUserForDetails && selectedUserForDetails.id === userId) {
+      setSelectedUserForDetails(prev => prev ? { ...prev, bill: newBillValue, updatedAt: Timestamp.now(), lastPaymentType: 'cash_admin_reset', lastPaymentAt: Timestamp.now() } : null);
+    }
+  };
+
+  const handleUserBalanceResetError = (errorMsg: string) => {
+    setError(errorMsg);
+    console.error("Balance Reset Error (from Modal):", errorMsg);
   };
 
   const openSeatSelectionModal = (user: UserWithId) => {
@@ -335,21 +343,18 @@ const AdminUserManagementPage: React.FC = () => {
     const loadingKeyForSeatAction = `seat-${targetUser.id}`;
     setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: true }));
     setError(null); setSuccessMessage(null);
-
     try {
       const functions = getFunctions(undefined, 'asia-northeast1');
       const checkInFn = httpsCallable<
           { userId: string; tableId: string; seatNumber: number; amountToPlay: number; },
           { status: string; message: string; }
       >(functions, 'checkInUserWithChips');
-
       const result = await checkInFn({
           userId: targetUser.id,
           tableId: newTableId,
           seatNumber: newSeatNumber,
           amountToPlay: amountToPlayInput ?? 0,
       });
-
       if (result.data.status === 'success') {
           setSuccessMessage(result.data.message || `${targetUser.pokerName || targetUser.email} さんを着席/チェックインさせました。`);
           fetchUsersWithFilters(false, null);
@@ -396,19 +401,16 @@ const AdminUserManagementPage: React.FC = () => {
         setActionLoading(prev => ({ ...prev, [`settle-${userForChipSettlement.id}`]: false }));
         return;
     }
-
     setIsSubmittingSettlement(true);
     const loadingKey = `settle-${userForChipSettlement.id}`;
     setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
     setError(null); setSuccessMessage(null);
-
     try {
       const functions = getFunctions(undefined, 'asia-northeast1');
       const initiateSettlementFn = httpsCallable<
         { userId: string; tableId: string; seatNumber: number; denominationsCount: { [key: string]: number }; totalAdminEnteredChips: number },
         { status: string; message: string }
       >(functions, 'initiateChipSettlementByAdmin');
-
       const result = await initiateSettlementFn({
         userId: userForChipSettlement.id,
         tableId: userForChipSettlement.currentTableId,
@@ -438,32 +440,32 @@ const AdminUserManagementPage: React.FC = () => {
   useEffect(() => {
     const messageElement = document.getElementById('admin-page-message');
     if (!messageElement) return;
-
     if (successMessage) {
       messageElement.textContent = successMessage;
       messageElement.className = 'p-3 mb-4 rounded-md text-white font-semibold bg-green-500 transition-opacity duration-300 opacity-100';
       const timer = setTimeout(() => {
         setSuccessMessage(null);
-        if (messageElement) messageElement.className += ' opacity-0 hidden';
+        if (messageElement) messageElement.className = 'hidden opacity-0';
       }, 3000);
       return () => clearTimeout(timer);
     } else if (error) {
       messageElement.textContent = error;
       messageElement.className = 'p-3 mb-4 rounded-md text-white font-semibold bg-red-700 transition-opacity duration-300 opacity-100';
       const timer = setTimeout(() => {
-        // setError(null);
-        if (messageElement) messageElement.className += ' opacity-0 hidden';
+        setError(null);
+        if (messageElement) messageElement.className = 'hidden opacity-0';
       }, 7000);
       return () => clearTimeout(timer);
     } else {
-      messageElement.className = 'hidden opacity-0';
+      if (messageElement.className !== 'hidden opacity-0') {
+          messageElement.className = 'hidden opacity-0';
+      }
     }
   }, [successMessage, error]);
 
   const filteredUsers = useMemo(() => {
     const usersArray = users || [];
     let tempUsers = usersArray;
-
     const term = searchTerm.toLowerCase();
     if (term) {
       tempUsers = tempUsers.filter(user =>
@@ -477,17 +479,17 @@ const AdminUserManagementPage: React.FC = () => {
 
   const unapprovedUserCount = useMemo(() => (users || []).filter(user => !user.approved).length, [users]);
 
-  // useEffect(() => {
-  //   console.log("AppContext Loading:", appContextLoading);
-  //   console.log("Current Admin User:", currentUser?.email, "Is Admin:", currentUser?.isAdmin);
-  // }, [appContextLoading, currentUser]);
+  useEffect(() => {
+    // console.log("AppContext Loading:", appContextLoading);
+    // console.log("Current Admin User:", currentUser?.email, "Is Admin:", currentUser?.isAdmin);
+  }, [appContextLoading, currentUser]);
 
   useEffect(() => {
     console.log("Users state updated (length):", users.length);
   }, [users]);
 
   useEffect(() => {
-    console.log("FilteredUsers updated (length):", filteredUsers.length);
+    // console.log("FilteredUsers updated (length):", filteredUsers.length);
   }, [filteredUsers]);
 
   // useEffect(() => {
@@ -641,7 +643,7 @@ const AdminUserManagementPage: React.FC = () => {
             </table>
         </div>
 
-         {!loadingUsers && !loadingMore && hasMore && users.length > 0 && (
+         {!loadingUsers && !loadingMore && hasMoreData && users.length > 0 && (
           <div className="text-center mt-6">
             <button
               onClick={handleLoadMore}
@@ -668,14 +670,8 @@ const AdminUserManagementPage: React.FC = () => {
             onUnapprove={handleUnapproveUser}
             onUserUpdateSuccess={setSuccessMessage}
             onUserUpdateError={setError}
-            onBalanceResetSuccess={(userId, newBill) => {
-              setSuccessMessage(`ユーザー (ID: ${userId.substring(0,6)}...) の会計残高を ¥${newBill.toLocaleString()} にリセットしました。`);
-              setUsers(prevUsers => prevUsers.map(u => u.id === userId ? { ...u, bill: newBill, updatedAt: Timestamp.now() } : u));
-              if (selectedUserForDetails && selectedUserForDetails.id === userId) {
-                setSelectedUserForDetails(prev => prev ? { ...prev, bill: newBill, updatedAt: Timestamp.now() } : null);
-              }
-            }}
-            onBalanceResetError={setError}
+            onBalanceResetSuccess={handleUserBalanceResetSuccess}
+            onBalanceResetError={handleUserBalanceResetError}
           />
         )}
 
