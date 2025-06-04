@@ -17,6 +17,7 @@ export interface AppContextType {
   loading: boolean;
   error: string | null;
   refreshCurrentUser: () => Promise<void>; // ★★★ refreshCurrentUser の型定義を追加 ★★★
+  logout: () => Promise<void>; 
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -90,12 +91,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => unsubscribe();
   }, [fetchFirestoreData]); // fetchFirestoreDataを依存配列に追加
 
+  const logout = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await auth.signOut();
+      setCurrentUser(null);
+    } catch (e: any) {
+      console.error("Error signing out:", e);
+      setError("ログアウト中にエラーが発生しました。");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const value = {
     currentUser,
     isAuthenticated: !!currentUser,
     loading,
     error,
     refreshCurrentUser, // ★★★ value に refreshCurrentUser を追加 ★★★
+    logout, // ★★★ logout を追加 ★★★
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
