@@ -13,6 +13,8 @@ import CheckinPage from './pages/CheckinPage';
 import TableStatusPage from './pages/TableStatusPage'; // ユーザー向け卓状況ページ
 // ★★★ AdminChipOptionsPage のインポート ★★★
 import AdminChipOptionsPage from './pages/AdminChipOptionsPage'; 
+// ★★★ UserProfilePage のインポートを追加 ★★★
+import UserProfilePage from './pages/UserProfilePage';
 
 // Admin Page Components
 import AdminDashboardPage from './pages/AdminDashboardPage';
@@ -21,6 +23,8 @@ import AdminDrinkMenuPage from './pages/AdminDrinkMenuPage';
 import AdminTableManagementPage from './pages/AdminTableManagementPage';
 import AdminOrderManagementPage from './pages/AdminOrderManagementPage';
 // import AdminPrivilegePage from './pages/AdminPrivilegePage'; // もし権限管理を別ページにするなら
+// ★★★ AdminGameTemplatesPage のインポートを追加 ★★★
+import AdminGameTemplatesPage from './pages/AdminGameTemplatesPage'; 
 
 // Common Components
 import Navbar from './components/common/Navbar'; // パスを確認
@@ -88,6 +92,8 @@ const App: React.FC = () => {
             <Route path="/order" element={<AuthenticatedRoute><OrderPage /></AuthenticatedRoute>} />
             <Route path="/qr" element={<AuthenticatedRoute><QRCodePage /></AuthenticatedRoute>} />
             <Route path="/tables" element={<AuthenticatedRoute><TableStatusPage /></AuthenticatedRoute>} />
+            {/* ★★★ UserProfilePage へのルート定義を追加 ★★★ */}
+            <Route path="/profile" element={<AuthenticatedRoute><UserProfilePage /></AuthenticatedRoute>} />
 
             {/* Staff or Admin Routes */}
             <Route path="/checkin" element={<StaffOrAdminRoute><CheckinPage /></StaffOrAdminRoute>} />
@@ -107,6 +113,11 @@ const App: React.FC = () => {
             <Route
               path="/admin/chip-options"
               element={<AdminRoute><AdminChipOptionsPage /></AdminRoute>}
+            />
+            {/* ★★★ AdminGameTemplatesPage へのルート定義を追加 ★★★ */}
+            <Route
+              path="/admin/game-templates"
+              element={<AdminRoute><AdminGameTemplatesPage /></AdminRoute>}
             />
 
             {/* Catch All - Redirect to home or login */}

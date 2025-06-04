@@ -488,6 +488,9 @@ exports.confirmAndFinalizeChipSettlement = functions
             const sessionMinBuyIn = gameSessionData.minBuyIn;
             const sessionMaxBuyIn = gameSessionData.maxBuyIn;
 
+            // Log these values for future complex fee calculation logic
+            console.log(`Fee calculation context for session ${userDataForLog.activeGameSessionId}: Game Type: ${gameType}, Rate Info: ${rateInfo}, Min Buy-In: ${sessionMinBuyIn}, Max Buy-In: ${sessionMaxBuyIn}`);
+
             // 例: 単純な時間課金 (30分ごとに500円)
             const feePerUnitTime = 500; // 単位時間あたりの料金
             const unitTimeMinutes = 30; // 単位時間(分)
@@ -573,7 +576,7 @@ exports.finalizeDrinkOrderAndBill = functions
         if (orderData.userId !== userId) throw new functions.https.HttpsError("permission-denied", "この注文はあなたのユーザーIDに紐付いていません。");
         if (orderData.orderStatus !== "delivered_awaiting_confirmation") throw new functions.https.HttpsError("failed-precondition", `注文ステータスが「提供済み(ユーザー確認待ち)」ではありません。(現在のステータス: ${orderData.orderStatus})`);
 
-        const totalOrderPrice = orderData.totalOrderPrice || 0;
+        // totalOrderPrice 変数は使用されていないため削除しました。
         const currentBill = userData.bill || 0;
 
         // ドリンク注文の場合はbillに加算し、チップ購入は既にpurchaseChipsで処理されているので、ここで再加算しない

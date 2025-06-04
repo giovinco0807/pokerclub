@@ -38,7 +38,7 @@ export interface UserData {
   address?: string;
   phone?: string;
   birthDate?: string;
-  idFrontUrl?: string;
+  idFrontUrl?: string | null; 
   idBackUrl?: string | null;
   chips: number; 
   chipsInPlay: number; 
@@ -65,6 +65,10 @@ export interface UserData {
   avatarApproved?: boolean; 
   avatarApprovalStatus?: 'pending' | 'approved' | 'rejected' | null;
   activeGameSessionId?: string | null; // 現在アクティブなゲームセッションのID
+  
+  // ★追加: 支払い履歴追跡用
+  latestPaymentTimestamp?: Timestamp | null;
+  latestPaymentAmount?: number | null;
 }
 
 export interface UserWithId extends UserData {
@@ -212,8 +216,8 @@ export interface TableData {
   currentGameTemplateId?: string | null; // 適用されているゲームテンプレートのID
   minBuyIn?: number;
   maxBuyIn?: number;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
+  createdAt?: Timestamp | Date; // ★ここを修正
+  updatedAt?: Timestamp | Date; // ★ここを修正
 }
 export interface Table extends TableData {
   id: string;
@@ -228,8 +232,8 @@ export interface GameTemplate {
   rateOrMinBet?: string | null; // 実際のレート文字列やベット情報
   description?: string;
   isActive: boolean;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
+  createdAt?: Timestamp | Date;       // ★ここを修正
+  updatedAt?: Timestamp | Date;       // ★ここを修正
 }
 
 export interface GameSession {

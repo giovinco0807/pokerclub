@@ -24,6 +24,7 @@ import {
   Box,
 } from '@mui/material';
 import { Add, Edit, Delete } from '@mui/icons-material';
+import { SelectChangeEvent } from '@mui/material/Select'; // ★追加
 import { db } from '../services/firebase'; // Firestoreのdbインスタンスをインポート
 import {
   collection,
@@ -65,7 +66,7 @@ const AdminTableManagementPage: React.FC = () => {
 
   const [openDialog, setOpenDialog] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [currentTable, setCurrentTable] = useState<Partial<TableData>>({
+  const [currentTable, setCurrentTable] = useState<Partial<PokerTable>>({ // ★修正
     name: '',
     maxSeats: 9, // capacity から maxSeats に変更
     status: 'active',
@@ -159,7 +160,8 @@ const AdminTableManagementPage: React.FC = () => {
     setError(null);
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | { name?: string; value: unknown }>) => {
+  // TextField用のhandleChange
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { // ★修正
     const { name, value } = e.target;
     // 数値型への変換が必要なフィールドを特定
     const numericFields = ['maxSeats', 'minBuyIn', 'maxBuyIn'];
@@ -169,8 +171,17 @@ const AdminTableManagementPage: React.FC = () => {
     }));
   };
 
+  // Material-UI Select 用の汎用ハンドラ
+  const handleMuiSelectChange = (event: SelectChangeEvent<string | number>) => { // ★追加
+    const { name, value } = event.target;
+    setCurrentTable((prev) => ({
+      ...prev,
+      [name as string]: value,
+    }));
+  };
+
   // ゲームテンプレート選択時のハンドラ
-  const handleGameTemplateChange = (e: React.ChangeEvent<{ name?: string; value: unknown }>) => {
+  const handleGameTemplateChange = (e: SelectChangeEvent<string>) => { // ★引数の型を修正
     const templateId = e.target.value as string;
     const selectedTemplate = gameTemplates.find(t => t.id === templateId);
 
@@ -202,7 +213,7 @@ const AdminTableManagementPage: React.FC = () => {
     setIsFormSubmitting(true);
     setError(null);
 
-    const { id, createdAt, updatedAt, seats, ...dataToSend } = currentTable; // seatsも除外
+    const { id, createdAt, updatedAt, seats, ...dataToSend } = currentTable; // ★修正
     const finalData = {
         ...dataToSend,
         maxSeats: Number(dataToSend.maxSeats), // 必ず数値に変換
@@ -225,7 +236,7 @@ const AdminTableManagementPage: React.FC = () => {
         alert('テーブル情報を更新しました。');
       } else {
         // 新規作成時は createTableWithSeats を使用
-        const newTableRef = doc(tablesCollection); // IDを先に取得
+        const newTableRef = doc(tablesCollection); // IDを事前に取得
         const batch = writeBatch(db);
 
         batch.set(newTableRef, {
@@ -280,7 +291,7 @@ const AdminTableManagementPage: React.FC = () => {
     }
   };
 
-  const getGameTemplateInfo = (templateId: string | null) => {
+  const getGameTemplateInfo = (templateId: string | null | undefined) => { // ★引数の型を修正
     if (!templateId) return '未設定';
     const template = gameTemplates.find(gt => gt.id === templateId);
     return template ? `${template.templateName} (${template.gameType} / ${template.rateOrMinBet || 'N/A'})` : '不明';
@@ -411,9 +422,9 @@ const AdminTableManagementPage: React.FC = () => {
               labelId="status-label"
               id="status"
               name="status"
-              value={currentTable.status}
+              value={currentTable.status || ''} // ★修正
               label="状態"
-              onChange={handleChange}
+              onChange={handleMuiSelectChange} // ★修正
               sx={{ color: 'white', '& .MuiSelect-select': { backgroundColor: '#4a5568' }, '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' } }}
             >
               {TABLE_STATUS_OPTIONS.map((status) => (
@@ -431,7 +442,7 @@ const AdminTableManagementPage: React.FC = () => {
               name="currentGameTemplateId"
               value={currentTable.currentGameTemplateId || ''}
               label="適用するゲームテンプレート"
-              onChange={handleGameTemplateChange} // 専用のハンドラ
+              onChange={handleGameTemplateChange} // ★修正
               sx={{ color: 'white', '& .MuiSelect-select': { backgroundColor: '#4a5568' }, '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' } }}
             >
               <MenuItem value="">
@@ -457,9 +468,9 @@ const AdminTableManagementPage: React.FC = () => {
                   labelId="game-type-manual-label"
                   id="game-type-manual"
                   name="gameType"
-                  value={currentTable.gameType}
+                  value={currentTable.gameType || ''} // ★修正
                   label="ゲームタイプ (手動)"
-                  onChange={handleChange}
+                  onChange={handleMuiSelectChange} // ★修正
                   sx={{ color: 'white', '& .MuiSelect-select': { backgroundColor: '#4a5568' }, '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' } }}
                 >
                   {GAME_NAME_OPTIONS.map((option) => (

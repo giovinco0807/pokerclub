@@ -1,520 +1,463 @@
 // src/pages/AdminUserManagementPage.tsx
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, query, orderBy, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { useAppContext } from '../contexts/AppContext';
-import { Link } from 'react-router-dom';
-import UserDetailsModal, { StatusBadge } from '../components/admin/UserDetailsModal';
-import type { UserDetailsModalProps } from '../components/admin/UserDetailsModal'; 
-import SeatSelectionModal from '../components/admin/SeatSelectionModal';
-import type { SeatSelectionModalProps } from '../components/admin/SeatSelectionModal'; 
-import ChipSettlementModal from '../components/admin/ChipSettlementModal';
-import type { ChipSettlementModalProps } from '../components/admin/ChipSettlementModal';
-import { UserData, UserWithId, Table, Seat } from '../types';
-import { getAllTables, getSeatsForTable } from '../services/tableService';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import React, { useState, useEffect, useCallback } from 'react';
+import { collection, query, doc, updateDoc, deleteDoc, where, orderBy, limit, startAfter, getDocs, Timestamp } from 'firebase/firestore';
+import { db, auth } from '../services/firebase';
+import { getFunctions } from 'firebase/functions';
+const functions = getFunctions();
+import { UserWithId } from '../types';
+import { httpsCallable } from 'firebase/functions';
+import AdminLayout from '../components/admin/AdminLayout';
+import UserDetailsModal from '../components/admin/UserDetailsModal';
+import ConfirmationModal from '../components/common/ConfirmationModal';
+import { format } from 'date-fns';
+import { AiOutlineSearch, AiOutlineCloseCircle, AiOutlineLoading } from 'react-icons/ai';
+import { StatusBadge } from '../components/admin/UserDetailsModal';
 
-type UserListViewMode = 'checkedIn' | 'unapproved' | 'all';
+
+// formatTimestampのヘルパー関数（再利用のためここに定義）
+const formatTimestamp = (timestamp: Timestamp | Date | undefined | null, includeSeconds: boolean = false): string => {
+  if (!timestamp) return 'N/A';
+  let date: Date;
+  if (timestamp instanceof Timestamp) {
+    date = timestamp.toDate();
+  } else if (timestamp instanceof Date) {
+    date = timestamp;
+  } else {
+    return 'Invalid Date';
+  }
+  const formatStr = `yyyy/MM/dd HH:mm${includeSeconds ? ':ss' : ''}`;
+  return format(date, formatStr);
+};
 
 const AdminUserManagementPage: React.FC = () => {
-  const { currentUser, loading: appContextLoading, refreshCurrentUser } = useAppContext();
   const [users, setUsers] = useState<UserWithId[]>([]);
-  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedUser, setSelectedUser] = useState<UserWithId | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<UserWithId | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterApproved, setFilterApproved] = useState<boolean | null>(null);
-  const [viewMode, setViewMode] = useState<UserListViewMode>('all');
+  const [filterCheckedIn, setFilterCheckedIn] = useState<boolean | null>(null);
+  const [filterStaff, setFilterStaff] = useState<boolean | null>(null);
 
-  const [isUserDetailsModalOpen, setIsUserDetailsModalOpen] = useState(false);
-  const [selectedUserForDetails, setSelectedUserForDetails] = useState<UserWithId | null>(null);
+  // ページネーション用
+  const [lastVisible, setLastVisible] = useState<any>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const usersPerPage = 20;
 
-  const [tables, setTables] = useState<Table[]>([]);
-  const [loadingTables, setLoadingTables] = useState(true);
-  const [isSeatSelectionModalOpen, setIsSeatSelectionModalOpen] = useState(false);
-  const [userForSeating, setUserForSeating] = useState<UserWithId | null>(null);
-
-  const [isChipSettlementModalOpen, setIsChipSettlementModalOpen] = useState(false);
-  const [userForChipSettlement, setUserForChipSettlement] = useState<UserWithId | null>(null);
-  const [isSubmittingSettlement, setIsSubmittingSettlement] = useState(false);
-  
-  const [actionLoading, setActionLoading] = useState<{[key: string]: boolean}>({});
-
-  const fetchUsers = useCallback(async () => {
-    setLoadingUsers(true); setError(null);
-    try {
-      const usersCollectionRef = collection(db, 'users');
-      const q = query(usersCollectionRef, orderBy('pokerName'), orderBy('email'));
-      const querySnapshot = await getDocs(q);
-      const usersList = querySnapshot.docs.map(docSnapshot => {
-        const firestoreData = docSnapshot.data();
-        return { id: docSnapshot.id, ...(firestoreData as UserData) } as UserWithId;
-      });
-      setUsers(usersList);
-    } catch (err: any) { 
-      console.error("ユーザー一覧取得失敗 (AdminUserManagementPage):", err);
-      setError(`ユーザー一覧の取得に失敗: ${err.message}`); 
-    } 
-    finally { setLoadingUsers(false); }
-  }, []);
-
-  const fetchAllTableDataWithSeats = useCallback(async () => {
-    setLoadingTables(true);
+  const fetchUsersWithFilters = useCallback(async (isLoadMore: boolean = false) => {
     setError(null);
-    try {
-      const tablesFromService = await getAllTables(); 
-      const tablesWithSeatsPromises = tablesFromService.map(async (tableData) => {
-        const currentTableId = tableData.id;
-        if (!currentTableId) {
-            console.error("fetchAllTableDataWithSeats: Table ID is missing for tableData:", tableData);
-            return { ...tableData, id: `unknown-${Math.random().toString(36).substring(7)}`, seats: [] } as Table; 
-        }
-        const seats = await getSeatsForTable(currentTableId);
-        return { ...tableData, id: currentTableId, seats: seats || [] } as Table;
-      });
-      const resolvedTables = await Promise.all(tablesWithSeatsPromises);
-      setTables(resolvedTables);
-    } catch (err: any) { 
-      console.error("テーブルデータ取得失敗 (AdminUserManagementPage):", err);
-      setError(`テーブルデータ取得失敗: ${err.message}`); 
+    if (!isLoadMore) {
+      setLoading(true);
+      setUsers([]);
+      setLastVisible(null);
+      setHasMore(true);
+    } else {
+      setLoadingMore(true);
     }
-    finally { setLoadingTables(false); }
-  }, []); 
+
+    try {
+      const usersColRef = collection(db, 'users');
+      let qry = query(usersColRef);
+
+      // デバッグ用のログを追加
+      console.log('Query Filters:');
+      console.log('  filterApproved:', filterApproved);
+      console.log('  filterCheckedIn:', filterCheckedIn);
+      console.log('  filterStaff:', filterStaff);
+      console.log('  searchQuery:', searchQuery);
+
+
+      if (filterApproved !== null) {
+        // filterApprovedがnullでない場合のみwhere句を適用
+        qry = query(qry, where('approved', '==', filterApproved));
+      }
+
+      if (filterCheckedIn !== null) {
+        qry = query(qry, where('isCheckedIn', '==', filterCheckedIn));
+      }
+
+      let applyClientSideStaffFilter = false;
+      if (filterStaff !== null) {
+          if (filterStaff) {
+              // スタッフのみ表示 (isStaffがtrueのユーザーをFirestoreで直接絞り込む)
+              qry = query(qry, where('isStaff', '==', true));
+          } else {
+              // 一般ユーザーのみ表示 (isStaffがtrueでないユーザー)。
+              // Firestoreで '!=' や 'not-in' は使えないため、
+              // 全件取得後にクライアントサイドでフィルタリングを行う。
+              applyClientSideStaffFilter = true;
+          }
+      }
+
+      // orderByとlimitは常に適用
+      qry = query(qry, orderBy('createdAt', 'desc'), limit(usersPerPage));
+
+      if (isLoadMore && lastVisible) {
+        qry = query(qry, startAfter(lastVisible));
+      }
+
+      const documentSnapshots = await getDocs(qry);
+
+      // 取得したドキュメント数とデータ内容のログを追加
+      console.log('Fetched document count:', documentSnapshots.docs.length);
+      // documentSnapshots.docs.forEach(doc => console.log('  Fetched user:', doc.id, doc.data()));
+
+
+      let fetchedUsers: UserWithId[] = documentSnapshots.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as UserWithId));
+
+      // クライアントサイドでの最終フィルタリング
+      let finalUsers = fetchedUsers;
+
+      const searchQueryLower = searchQuery.trim().toLowerCase();
+      if (searchQueryLower) {
+        finalUsers = finalUsers.filter(user =>
+          user.pokerName?.toLowerCase().includes(searchQueryLower) ||
+          user.email.toLowerCase().includes(searchQueryLower) ||
+          user.fullName?.toLowerCase().includes(searchQueryLower)
+        );
+      }
+
+      // スタッフフィルター (isStaffがfalseの場合のクライアントサイドフィルタリング)
+      if (applyClientSideStaffFilter) {
+          finalUsers = finalUsers.filter(user => !user.isStaff);
+      }
+
+      // 最終的な表示ユーザー数のログを追加
+      console.log('Final displayed user count:', finalUsers.length);
+
+      if (isLoadMore) {
+        setUsers(prev => [...prev, ...finalUsers]);
+      } else {
+        setUsers(finalUsers);
+      }
+
+      setLastVisible(documentSnapshots.docs[documentSnapshots.docs.length - 1]);
+      setHasMore(documentSnapshots.docs.length === usersPerPage);
+
+    } catch (err) {
+      console.error("ユーザーデータの取得に失敗しました:", err);
+      setError("ユーザーデータの取得に失敗しました。");
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [searchQuery, filterApproved, filterCheckedIn, filterStaff, lastVisible]);
+
 
   useEffect(() => {
-    if (!appContextLoading && currentUser && currentUser.isAdmin) {
-      fetchUsers();
-      fetchAllTableDataWithSeats();
-    } else if (!appContextLoading && (!currentUser || !currentUser.isAdmin)) {
-      setError("このページへのアクセス権限がありません。"); 
-      setLoadingUsers(false); 
-      setLoadingTables(false);
+    fetchUsersWithFilters(false);
+  }, [searchQuery, filterApproved, filterCheckedIn, filterStaff, fetchUsersWithFilters]);
+
+
+  const handleLoadMore = () => {
+    if (hasMore) {
+      fetchUsersWithFilters(true);
     }
-  }, [appContextLoading, currentUser, fetchUsers, fetchAllTableDataWithSeats]);
+  };
+
+
+  const handleViewDetails = (user: UserWithId) => {
+    setSelectedUser(user);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedUser(null);
+    fetchUsersWithFilters(false);
+  };
 
   const handleApproveUser = async (userId: string) => {
-    if (!window.confirm(`ユーザーID: ${userId.substring(0,8)}... のアカウントを承認しますか？`)) return;
-    const loadingKey = `approve-${userId}`;
-    setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
     try {
-      await updateDoc(doc(db, 'users', userId), { approved: true, updatedAt: serverTimestamp() });
-      setUsers(prevUsers => prevUsers.map(u => u.id === userId ? { ...u, approved: true } : u));
-      if (selectedUserForDetails?.id === userId) {
-        setSelectedUserForDetails(prevSelectedUser => prevSelectedUser ? {...prevSelectedUser, approved: true} : null);
-      }
-      alert('アカウントを承認しました。');
-    } catch (e: any) { 
-      console.error("アカウント承認失敗:", e);
-      alert(`承認処理に失敗しました: ${e.message}`); 
+      await updateDoc(doc(db, 'users', userId), { approved: true, updatedAt: Timestamp.now() });
+      setSuccessMessage("ユーザーを承認しました！");
+    } catch (error: any) {
+      console.error("ユーザー承認に失敗しました:", error);
+      setErrorMessage(`ユーザー承認に失敗しました: ${error.message}`);
+    } finally {
+        fetchUsersWithFilters(false);
     }
-    finally { setActionLoading(prev => ({ ...prev, [loadingKey]: false }));}
   };
 
   const handleUnapproveUser = async (userId: string) => {
-     if (!window.confirm(`ユーザーID: ${userId.substring(0,8)}... のアカウントの承認を取り消しますか？`)) return;
-    const loadingKey = `unapprove-${userId}`;
-    setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
     try {
-      await updateDoc(doc(db, 'users', userId), { approved: false, updatedAt: serverTimestamp() });
-      setUsers(prevUsers => prevUsers.map(u => u.id === userId ? { ...u, approved: false } : u));
-      if (selectedUserForDetails?.id === userId) {
-        setSelectedUserForDetails(prevSelectedUser => prevSelectedUser ? {...prevSelectedUser, approved: false} : null);
-      }
-      alert('アカウントの承認を取り消しました。');
-    } catch (e: any) { 
-      console.error("アカウント承認取消失敗:", e);
-      alert(`承認取消処理に失敗しました: ${e.message}`); 
-    }
-    finally { setActionLoading(prev => ({ ...prev, [loadingKey]: false }));}
-  };
-
-  const handleRowClick = (user: UserWithId) => {
-      const userForModal: UserWithId = { ...user, isAdminClientSide: user.id === currentUser?.uid ? currentUser?.isAdmin : undefined };
-      setSelectedUserForDetails(userForModal); 
-      setIsUserDetailsModalOpen(true);
-  };
-  const handleCloseUserDetailsModal = () => { setIsUserDetailsModalOpen(false); setSelectedUserForDetails(null); };
-
-  const openSeatSelectionModal = (user: UserWithId) => { 
-    if (!user.approved) {
-      alert("未承認のユーザーは着席させられません。まずアカウントを承認してください。");
-      return;
-    }
-    setUserForSeating(user); 
-    setIsSeatSelectionModalOpen(true); 
-  };
-  
-  const handleSeatUser = async (targetUser: UserWithId, newTableId: string, newSeatNumber: number, amountToPlayInput?: number) => {
-    if (!currentUser?.uid) { 
-      alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); 
-      return; 
-    }
-    if (!targetUser || !targetUser.id) {
-        alert("エラー: 対象ユーザー情報が不完全です。");
-        return;
-    }
-
-    const loadingKeyForSeatAction = `seat-${targetUser.id}`; 
-    setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: true }));
-
-    try {
-      const previousTableId = targetUser.currentTableId;
-      let previousTableInfo: Table | undefined;
-
-      if (targetUser.isCheckedIn && previousTableId) { 
-        previousTableInfo = tables.find(t => t.id === previousTableId);
-      }
-
-      const destinationTableInfo = tables.find(t => t.id === newTableId);
-      if (!destinationTableInfo) {
-        throw new Error("移動先のテーブル情報が見つかりません。ページを再読み込みしてください。");
-      }
-
-      if (targetUser.isCheckedIn && targetUser.currentTableId === newTableId && targetUser.currentSeatNumber === newSeatNumber) {
-        alert("同じテーブルの同じ座席には移動できません。");
-        setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-        setIsSeatSelectionModalOpen(false); 
-        setUserForSeating(null);
-        return;
-      }
-
-      const needsSettlementDueToGameChange = previousTableInfo && targetUser.isCheckedIn &&
-        (previousTableInfo.gameType !== destinationTableInfo.gameType || 
-         previousTableInfo.blindsOrRate !== destinationTableInfo.blindsOrRate);
-
-      if (needsSettlementDueToGameChange) {
-        if (targetUser.pendingChipSettlement) {
-            alert(`ユーザー「${targetUser.pokerName || targetUser.email}」は既にチップ精算の確認待ちです。\nまずユーザー側の確認を完了させてください。`);
-            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-            setIsSeatSelectionModalOpen(false); 
-            setUserForSeating(null);
-            return;
-        }
-
-        const confirmSettlement = window.confirm(
-          `ユーザー「${targetUser.pokerName || targetUser.email}」を異なるゲーム/レートのテーブルに移動します。\n` +
-          `現在のテーブル (${previousTableInfo?.name} - ${previousTableInfo?.gameType} ${previousTableInfo?.blindsOrRate || ''}) でのチップを一度精算する必要があります。\n` +
-          `チップ精算を開始しますか？\n(精算完了後、改めて新しいテーブルへの着席操作を行ってください)`
-        );
-
-        if (confirmSettlement) {
-          handleOpenChipSettlementModal(targetUser); 
-          setIsSeatSelectionModalOpen(false);      
-          setUserForSeating(null);
-          setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-          return; 
-        } else {
-          alert("テーブル移動をキャンセルしました。チップ精算が必要です。");
-          setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-          setIsSeatSelectionModalOpen(false); 
-          setUserForSeating(null);
-          return;
-        }
-      }
-      
-      let chipsToPlay: number; 
-      const currentOwnedChips = targetUser.chips ?? 0; 
-
-      if (amountToPlayInput === undefined || typeof amountToPlayInput !== 'number' || amountToPlayInput < 0) {
-          const currentChipsInPlay = targetUser.chipsInPlay ?? 0;
-          const defaultChipAmountStr = String( currentChipsInPlay > 0 && !targetUser.isCheckedIn ? 0 : 
-                                                currentChipsInPlay > 0 && targetUser.isCheckedIn ? currentChipsInPlay : 
-                                                (currentOwnedChips > 20000 ? 20000 : (currentOwnedChips >=0 ? currentOwnedChips : 0) ));
-          const amountStr = window.prompt(
-            `${targetUser.pokerName || targetUser.email} さんをテーブル ${destinationTableInfo.name} (座席 ${newSeatNumber}) に着席させます。\n持ち込むチップ額を入力してください (保有チップ: ${currentOwnedChips.toLocaleString()}):`, 
-            defaultChipAmountStr
-          );
-          if (amountStr === null) { 
-            alert("着席処理をキャンセルしました。"); 
-            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-            return; 
-          }
-          const amount = parseInt(amountStr, 10);
-          if (isNaN(amount) || amount < 0) { 
-            alert("無効なチップ額です。0以上の数値を入力してください。"); 
-            setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-            return; 
-          }
-          if (amount > currentOwnedChips) { 
-              alert(`保有チップ(${currentOwnedChips.toLocaleString()})を超える額は持ち込めません。`); 
-              setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-              return; 
-          }
-          chipsToPlay = amount;
-      } else {
-          chipsToPlay = amountToPlayInput;
-      }
-      
-      const functions = getFunctions(undefined, 'asia-northeast1');
-      const checkInFn = httpsCallable<
-          { userId: string; tableId: string; seatNumber: number; amountToPlay: number; },
-          { status: string; message: string; }
-      >(functions, 'checkInUserWithChips');
-
-      const result = await checkInFn({
-          userId: targetUser.id,
-          tableId: newTableId,
-          seatNumber: newSeatNumber,
-          amountToPlay: chipsToPlay, 
-      });
-
-      if (result.data.status === 'success') {
-          alert(result.data.message || `${targetUser.pokerName || targetUser.email} さんを着席/チェックインさせました。`);
-          fetchUsers(); 
-          fetchAllTableDataWithSeats(); 
-          if (refreshCurrentUser && typeof refreshCurrentUser === 'function') {
-            await refreshCurrentUser();
-          }
-      } else {
-          throw new Error(result.data.message || "着席処理でエラーが発生しました。");
-      }
-    } catch (e: any) {
-        console.error("着席/テーブル移動エラー (AdminUserManagementPage):", e);
-        alert(`着席/テーブル移動処理に失敗しました: ${e.message}`);
+      await updateDoc(doc(db, 'users', userId), { approved: false, updatedAt: Timestamp.now() });
+      setSuccessMessage("ユーザーの承認を取り消しました！");
+    } catch (error: any) {
+      console.error("ユーザー承認取り消しに失敗しました:", error);
+      setErrorMessage(`ユーザー承認取り消しに失敗しました: ${error.message}`);
     } finally {
-        setActionLoading(prev => ({ ...prev, [loadingKeyForSeatAction]: false }));
-        setIsSeatSelectionModalOpen(false); 
-        setUserForSeating(null);
+        fetchUsersWithFilters(false);
     }
   };
 
-  const handleOpenChipSettlementModal = (user: UserWithId) => {
-    if (!user.isCheckedIn || !user.currentTableId || typeof user.currentSeatNumber !== 'number') { 
-      alert("このユーザーはチェックインしていないか、テーブル/座席が不明です。");
-      return;
-    }
-    if (user.pendingChipSettlement) {
-        alert("このユーザーには既に確認待ちのチップ精算があります。まずそれを処理またはユーザーに確認を促してください。");
-        return;
-    }
-    setUserForChipSettlement(user);
-    setIsChipSettlementModalOpen(true);
+
+  const handleDeleteUser = (user: UserWithId) => {
+    setUserToDelete(user);
+    setIsConfirmModalOpen(true);
   };
 
-  const handleSubmitChipSettlement = async (denominationsCount: { [key: string]: number }, totalChips: number) => {
-    if (!userForChipSettlement || !userForChipSettlement.id || !userForChipSettlement.currentTableId || typeof userForChipSettlement.currentSeatNumber !== 'number') {
-      alert("精算対象のユーザー、テーブルID、または座席番号の情報が不完全です。");
-      setIsSubmittingSettlement(false); // ★ ローディング解除
-      if(userForChipSettlement?.id) { // ★ nullでないことを確認
-          setActionLoading(prev => ({ ...prev, [`settle-${userForChipSettlement!.id}`]: false })); 
-      }
-      return;
-    }
-    if (!currentUser?.uid) { 
-        alert("エラー: 操作を実行するユーザー情報が取得できませんでした。"); 
-        setIsSubmittingSettlement(false); // ★ ローディング解除
-        setActionLoading(prev => ({ ...prev, [`settle-${userForChipSettlement.id}`]: false })); // ★ ローディング解除
-        return;
-    }
-
-    setIsSubmittingSettlement(true);
-    const loadingKey = `settle-${userForChipSettlement.id}`;
-    setActionLoading(prev => ({ ...prev, [loadingKey]: true })); 
-
+  const confirmDelete = async () => {
+    if (!userToDelete) return;
+    setError(null);
     try {
-      const functions = getFunctions(undefined, 'asia-northeast1');
-      const initiateSettlementFn = httpsCallable<
-        { userId: string; tableId: string; seatNumber: number; denominationsCount: { [key: string]: number }; totalAdminEnteredChips: number },
-        { status: string; message: string }
-      >(functions, 'initiateChipSettlementByAdmin');
+      await deleteDoc(doc(db, 'users', userToDelete.id));
 
-      const result = await initiateSettlementFn({
-        userId: userForChipSettlement.id, 
-        tableId: userForChipSettlement.currentTableId, 
-        seatNumber: userForChipSettlement.currentSeatNumber, 
-        denominationsCount: denominationsCount,
-        totalAdminEnteredChips: totalChips,
-      });
-      if (result && result.data && typeof result.data.status === 'string') {
-    if (result.data.status === 'success') {
-      alert(result.data.message || "チップ精算リクエストをユーザー確認待ちにしました。");
-      setIsChipSettlementModalOpen(false); 
-      setUserForChipSettlement(null);     
-      fetchUsers();                       
-      if (refreshCurrentUser && typeof refreshCurrentUser === 'function') {
-          await refreshCurrentUser(); 
+      const deleteUserFn = httpsCallable<{ uid: string }, { success: boolean; message: string }>(functions, 'deleteUserByAdmin');
+      const result = await deleteUserFn({ uid: userToDelete.id });
+
+      if (!result.data.success) {
+        throw new Error(result.data.message || "Firebase Authユーザーの削除に失敗しました。");
       }
-    } else {
-      // Functionが status !== 'success' だが、期待したデータ構造で返した場合
-      console.error("チップ精算開始処理エラー (Function Response):", result.data);
-      throw new Error(result.data.message || "チップ精算開始処理でサーバーがエラーを返しました。");
-    }
-  } else {
-    // result.data が期待した形でない場合 (例: CORSエラーでレスポンスが空、Functionがクラッシュしたなど)
-    console.error("Firebase Functionからのレスポンスが無効、またはデータがありません:", result);
-    throw new Error("サーバーからの応答が無効か、データがありませんでした。FunctionのログやCORS設定を確認してください。");
-  }
-} catch (e: any) {
-  console.error("チップ精算開始エラー (AdminUserManagementPage):", e);
-  let errorMessage = `チップ精算の開始に失敗しました。`;
-  if (e?.message) { // e や e.message が存在するか確認
-    errorMessage += ` (${e.message})`;
-  }
-  // Firebase HttpsError の場合、e.code や e.details を含めることも検討
-  if (e?.code) {
-    errorMessage += ` (コード: ${e.code})`;
-  }
-  alert(errorMessage);
+
+      setUsers(prev => prev.filter(u => u.id !== userToDelete.id));
+      setSuccessMessage("ユーザーを完全に削除しました。");
+    } catch (err: any) {
+      console.error("ユーザーの削除に失敗しました:", err);
+      setErrorMessage(`ユーザーの削除に失敗しました: ${err.message}`);
     } finally {
-      setIsSubmittingSettlement(false);
-      setActionLoading(prev => ({ ...prev, [loadingKey]: false }));
+      setIsConfirmModalOpen(false);
+      setUserToDelete(null);
+      fetchUsersWithFilters(false);
     }
   };
 
-  const filteredUsers = useMemo(() => {
-    const usersArray = users || []; 
-    return usersArray
-      .filter(user => filterApproved === null || user.approved === filterApproved)
-      .filter(user => {
-        if (viewMode === 'checkedIn') return user.isCheckedIn === true;
-        if (viewMode === 'unapproved') return user.approved === false;
-        return true;
-      })
-      .filter(user => {
-        const term = searchTerm.toLowerCase();
-        if (!term) return true;
-        return (
-          user.pokerName?.toLowerCase().includes(term) ||
-          user.fullName?.toLowerCase().includes(term) ||
-          user.email?.toLowerCase().includes(term)
-        );
-      });
-  }, [users, filterApproved, viewMode, searchTerm]);
+  const cancelDelete = () => {
+    setIsConfirmModalOpen(false);
+    setUserToDelete(null);
+  };
 
-  const unapprovedUserCount = useMemo(() => (users || []).filter(user => !user.approved).length, [users]);
 
-  if (appContextLoading) { return <div className="text-center p-10 text-xl text-neutral-lightest">アプリ情報読込中...</div>; }
-  if (!currentUser || !currentUser.isAdmin) { return <div className="text-center p-10 text-xl text-yellow-500">{error || "このページへのアクセス権限がありません。"}</div>; }
+  const setSuccessMessage = (message: string) => {
+    const adminMessageElement = document.getElementById('admin-message');
+    if (adminMessageElement) {
+      adminMessageElement.innerText = message;
+      adminMessageElement.classList.remove('bg-red-500');
+      adminMessageElement.classList.add('bg-green-500');
+      adminMessageElement.classList.remove('hidden');
+      setTimeout(() => {
+        adminMessageElement.classList.add('hidden');
+      }, 3000);
+    }
+  };
+
+  const setErrorMessage = (message: string) => {
+    const adminMessageElement = document.getElementById('admin-message');
+    if (adminMessageElement) {
+      adminMessageElement.innerText = message;
+      adminMessageElement.classList.remove('bg-green-500');
+      adminMessageElement.classList.add('bg-red-500');
+      adminMessageElement.classList.remove('hidden');
+      setTimeout(() => {
+        adminMessageElement.classList.add('hidden');
+      }, 5000);
+    }
+  };
+
 
   return (
-    <div className="container mx-auto p-4 sm:p-6 lg:p-8 text-neutral-lightest">
-      <div className="flex justify-between items-center mb-6 pb-3 border-b border-slate-700">
-        <h1 className="text-3xl font-bold text-red-500">ユーザー管理</h1>
-        <Link to="/admin" className="text-sm text-sky-400 hover:underline">← 管理ダッシュボードへ</Link>
-      </div>
+    <AdminLayout>
+      <h1 className="text-3xl font-bold text-neutral-lightest mb-6">ユーザー管理</h1>
 
-      <div className="mb-6 p-4 bg-slate-800 rounded-lg shadow">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end">
-            <div><label htmlFor="userViewMode" className="block text-sm font-medium text-slate-300 mb-1">表示モード:</label><select id="userViewMode" value={viewMode} onChange={(e) => setViewMode(e.target.value as UserListViewMode)} className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-red-500 focus:border-red-500 h-10"><option value="all">全ユーザー</option><option value="checkedIn">チェックイン中</option><option value="unapproved">未承認</option></select></div>
-            <div><label htmlFor="userSearchTerm" className="block text-sm font-medium text-slate-300 mb-1">検索:</label><input type="text" id="userSearchTerm" placeholder="名前, メール等" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-red-500 focus:border-red-500 h-10" /></div>
-            <div><label htmlFor="userFilterApproved" className="block text-sm font-medium text-slate-300 mb-1">承認状態:</label><select id="userFilterApproved" value={filterApproved === null ? 'all' : String(filterApproved)} onChange={(e) => { const val = e.target.value; setFilterApproved(val === 'all' ? null : val === 'true');}} className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-red-500 focus:border-red-500 h-10"><option value="all">すべて</option><option value="true">承認済み</option><option value="false">未承認</option></select></div>
-            <button onClick={() => { fetchUsers(); fetchAllTableDataWithSeats(); }} disabled={loadingUsers || loadingTables} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded h-10 disabled:opacity-50">
-                { (loadingUsers || loadingTables) ? "読込中..." : "リスト再読込"}
-            </button>
+      <div id="admin-message" className="hidden p-3 mb-4 rounded-md text-white font-semibold"></div>
+
+      {error && <div className="bg-red-600 p-3 mb-4 rounded-md text-white">{error}</div>}
+
+      {/* フィルターと検索 */}
+      <div className="bg-neutral-darker p-4 rounded-lg shadow-md mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="ポーカーネーム, メール, 氏名で検索..."
+              className="w-full p-2 pl-10 bg-neutral-dark text-neutral-lightest border border-neutral-600 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <AiOutlineSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" size={20} />
+            {searchQuery && (
+              <AiOutlineCloseCircle
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 cursor-pointer hover:text-neutral-200"
+                size={20}
+                onClick={() => setSearchQuery('')}
+              />
+            )}
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <label className="text-neutral-light">承認状態:</label>
+            <select
+              className="p-2 bg-neutral-dark text-neutral-lightest border border-neutral-600 rounded-md"
+              value={filterApproved === true ? 'approved' : filterApproved === false ? 'unapproved' : 'all'}
+              onChange={(e) => {
+                if (e.target.value === 'all') setFilterApproved(null);
+                else setFilterApproved(e.target.value === 'approved');
+              }}
+            >
+              <option value="all">全て</option>
+              <option value="approved">承認済</option>
+              <option value="unapproved">未承認</option>
+            </select>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <label className="text-neutral-light">チェックイン状態:</label>
+            <select
+              className="p-2 bg-neutral-dark text-neutral-lightest border border-neutral-600 rounded-md"
+              value={filterCheckedIn === true ? 'checkedin' : filterCheckedIn === false ? 'checkedout' : 'all'}
+              onChange={(e) => {
+                if (e.target.value === 'all') setFilterCheckedIn(null);
+                else setFilterCheckedIn(e.target.value === 'checkedin');
+              }}
+            >
+              <option value="all">全て</option>
+              <option value="checkedin">チェックイン中</option>
+              <option value="checkedout">チェックアウト済</option>
+            </select>
+          </div>
+          <div className="flex items-center space-x-2">
+            <label className="text-neutral-light">権限:</label>
+            <select
+              className="p-2 bg-neutral-dark text-neutral-lightest border border-neutral-600 rounded-md"
+              value={filterStaff === true ? 'staff' : filterStaff === false ? 'general' : 'all'}
+              onChange={(e) => {
+                if (e.target.value === 'all') setFilterStaff(null);
+                else setFilterStaff(e.target.value === 'staff');
+              }}
+            >
+              <option value="all">全て</option>
+              <option value="staff">スタッフ</option>
+              <option value="general">一般</option>
+            </select>
+          </div>
         </div>
-        {unapprovedUserCount > 0 && viewMode !== 'unapproved' && ( <div className="mt-4 p-3 bg-yellow-700/50 text-yellow-200 rounded-md text-sm"><p>現在、{unapprovedUserCount}人の未承認ユーザーがいます。<button onClick={() => setViewMode('unapproved')} className="ml-2 underline hover:text-yellow-100 font-semibold">未承認ユーザー表示</button></p></div>)}
       </div>
 
-      {(error && !(loadingUsers || loadingTables)) && <div className="mb-4 p-3 bg-red-900/50 text-yellow-300 rounded-md text-center">{error}</div>}
 
-      <div className="overflow-x-auto bg-slate-800 rounded-lg shadow">
-          <table className="min-w-full divide-y divide-slate-700">
-            <thead className="bg-slate-700">
+      {loading ? (
+        <div className="text-center text-neutral-light">
+          <AiOutlineLoading className="inline-block animate-spin mr-2" size={24} />
+          ユーザーを読み込み中...
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto bg-neutral-darker rounded-lg shadow">
+            <table className="min-w-full divide-y divide-neutral-700">
+              <thead className="bg-neutral-800">
                 <tr>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">ID</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">ポーカーネーム</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">氏名</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">承認</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">状態</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">保有チップ</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-slate-300 uppercase tracking-wider">使用中</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider min-w-[150px]">アクション</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">ポーカーネーム</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">メール</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">現在のチップ</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">会計残高</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">状態</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">登録日</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-neutral-400 uppercase tracking-wider">アクション</th>
                 </tr>
-            </thead>
-            <tbody className="bg-slate-800 divide-y divide-slate-700">
-              {(loadingUsers || loadingTables) ? ( 
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">ユーザー一覧を読み込み中...</td></tr>
-              ) : filteredUsers.length > 0 ? (
-                filteredUsers.map((user: UserWithId) => (
-                  <tr key={user.id} className="hover:bg-slate-700/50 transition-colors">
-                    <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-300 font-mono cursor-pointer hover:underline" title={user.id} onClick={() => handleRowClick(user)}>{user.id.substring(0, 6)}...</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-200 cursor-pointer hover:underline" onClick={() => handleRowClick(user)}>{user.pokerName || '-'}</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-200 cursor-pointer hover:underline" onClick={() => handleRowClick(user)}>{user.fullName || '-'}</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm">
-                        {user.approved ? <StatusBadge color="green" text="承認済" /> : <button onClick={(e) => { e.stopPropagation(); if(user.id) handleApproveUser(user.id); }} disabled={!user.id || actionLoading[`approve-${user.id}`]} className="text-green-400 hover:text-green-300 disabled:opacity-50 text-xs p-1">{actionLoading[`approve-${user.id}`] ? "処理中" : "承認する"}</button>}
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm">
-                        {user.isCheckedIn ? 
-                            <StatusBadge color="sky" text={`IN (T${user.currentTableId || '?'}-S${user.currentSeatNumber ?? '?'})`} /> : 
-                            <StatusBadge color="slate" text="OUT" />}
-                        {user.pendingChipSettlement && <StatusBadge color="purple" text="精算確認中" />}
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm text-slate-200 text-right">{(user.chips ?? 0).toLocaleString()}</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-sm text-sky-300 text-right">{(user.chipsInPlay ?? 0).toLocaleString()}</td>
-                    <td className="px-3 py-3 whitespace-nowrap text-xs font-medium space-x-1">
-                      {user.approved && !user.isCheckedIn && !user.pendingChipSettlement && (
-                        <button onClick={(e) => { e.stopPropagation(); openSeatSelectionModal(user); }} title="着席/チェックイン" className="text-sky-400 hover:text-sky-300 disabled:opacity-50 p-1" disabled={actionLoading[`seat-${user.id}`] || actionLoading[`move-${user.id}`]}>
-                          {actionLoading[`seat-${user.id}`] || actionLoading[`move-${user.id}`] ? "処理中..." : "着席"}
-                        </button>
-                      )}
-                      {user.approved && user.isCheckedIn && !user.pendingChipSettlement && (
-                        <>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); openSeatSelectionModal(user); }} 
-                            title="座席を移動する" 
-                            className="text-yellow-400 hover:text-yellow-300 disabled:opacity-50 p-1"
-                            disabled={actionLoading[`move-${user.id}`] || actionLoading[`seat-${user.id}`]}
-                          >
-                            {actionLoading[`move-${user.id}`] || actionLoading[`seat-${user.id}`] ? "処理中..." : "座席移動"}
-                          </button>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); handleOpenChipSettlementModal(user); }} 
-                            title="チップ精算を開始する" 
-                            className="text-amber-500 hover:text-amber-400 disabled:opacity-50 p-1" 
-                            disabled={actionLoading[`settle-${user.id}`]}
-                          >
-                            {actionLoading[`settle-${user.id}`] ? "処理中..." : "精算開始"}
-                          </button>
-                        </>
-                      )}
-                      {user.pendingChipSettlement && (
-                        <span className="text-purple-400 italic text-xs">ユーザー確認待ち</span>
-                      )}
-                       <button onClick={(e) => { e.stopPropagation(); handleRowClick(user); }} title="詳細表示" className="text-slate-400 hover:text-slate-300 p-1">詳細</button>
+              </thead>
+              <tbody className="bg-neutral-darker divide-y divide-neutral-700">
+                {users.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-4 text-center text-neutral-400">
+                      条件に一致するユーザーが見つかりません。
                     </td>
                   </tr>
-                ))
-              ) : ( 
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">表示条件に該当するユーザーがいません。</td></tr>
-              )}
-            </tbody>
-          </table>
-      </div>
-
-      {selectedUserForDetails && (
-        <UserDetailsModal 
-          user={selectedUserForDetails} 
-          isOpen={isUserDetailsModalOpen} 
-          onClose={handleCloseUserDetailsModal} 
-          onApprove={handleApproveUser}    
-          onUnapprove={handleUnapproveUser} 
-        />
+                ) : (
+                  users.map((user) => (
+                    <tr key={user.id} className="hover:bg-neutral-700 transition-colors duration-150">
+                      <td className="px-4 py-3 whitespace-nowrap text-neutral-lightest">
+                        {user.pokerName || '未設定'}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-neutral-light">
+                        {user.email}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-neutral-light">
+                        {user.chips.toLocaleString()} P
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-neutral-light">
+                        {user.bill.toLocaleString()} 円
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="flex flex-col space-y-1">
+                          <StatusBadge color={user.approved ? "green" : "yellow"} text={user.approved ? "承認済" : "未承認"} />
+                          <StatusBadge color={user.isCheckedIn ? "sky" : "slate"} text={user.isCheckedIn ? "チェックイン中" : "チェックアウト済"} />
+                          {user.isStaff && <StatusBadge color="purple" text="スタッフ" />}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-neutral-light text-sm">
+                        {formatTimestamp(user.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => handleViewDetails(user)}
+                          className="text-blue-500 hover:text-blue-700 mr-3"
+                        >
+                          詳細/編集
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          削除
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {/* ページネーションボタン */}
+          {hasMore && (
+            <div className="text-center mt-6">
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingMore ? (
+                  <>
+                    <AiOutlineLoading className="inline-block animate-spin mr-2" size={18} />
+                    読み込み中...
+                  </>
+                ) : (
+                  'さらに読み込む'
+                )}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
-      {userForSeating && (
-        <SeatSelectionModal
-          isOpen={isSeatSelectionModalOpen}
-          onClose={() => { setIsSeatSelectionModalOpen(false); setUserForSeating(null); }}
-          onSeatSelect={(tableId: string, seatNumber: number, amountToPlay?: number) => { 
-            if (userForSeating) {
-                handleSeatUser(userForSeating, tableId, seatNumber, amountToPlay); 
-            }
-          }}
-          targetUser={userForSeating}
-          currentTables={tables}
-          isLoadingTables={loadingTables}
-          needsChipInput={true} 
+      {selectedUser && (
+        <UserDetailsModal
+          user={selectedUser}
+          isOpen={isModalOpen}
+          onClose={handleCloseModal}
+          onApprove={handleApproveUser}
+          onUnapprove={handleUnapproveUser}
+          onUserUpdateSuccess={setSuccessMessage}
+          onUserUpdateError={setErrorMessage}
         />
       )}
-      {userForChipSettlement && (
-        <ChipSettlementModal
-          isOpen={isChipSettlementModalOpen}
-          onClose={() => { setIsChipSettlementModalOpen(false); setUserForChipSettlement(null);}}
-          user={userForChipSettlement}
-          onSubmitSettlement={handleSubmitChipSettlement}
-          isSubmitting={isSubmittingSettlement}
-        />
-      )}
-    </div>
+
+      <ConfirmationModal
+        isOpen={isConfirmModalOpen}
+        onClose={cancelDelete}
+        onConfirm={confirmDelete}
+        title="ユーザー削除の確認"
+        message={`ユーザー ${userToDelete?.pokerName || userToDelete?.email} を本当に削除しますか？この操作は元に戻せません。`}
+        confirmButtonText="削除する"
+        cancelButtonText="キャンセル"
+      />
+    </AdminLayout>
   );
 };
 

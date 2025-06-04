@@ -25,7 +25,8 @@ import {
   InputLabel,
   FormControl,
 } from '@mui/material';
-import { Add, Edit, Delete } from '@mui/icons-material';
+import { Add, Edit, Delete } from '@mui/icons-material'; // ★修正
+import { SelectChangeEvent } from '@mui/material/Select'; // ★追加
 import { db } from '../services/firebase'; // Firestoreのdbインスタンスをインポート
 import {
   collection,
@@ -75,8 +76,8 @@ const AdminGameTemplatesPage: React.FC = () => {
           id: doc.id,
           ...data,
           // Firestore TimestampをDateオブジェクトに変換（表示のため）
-          createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : data.createdAt,
-          updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate() : data.updatedAt,
+          createdAt: (data.createdAt instanceof Timestamp) ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: (data.updatedAt instanceof Timestamp) ? data.updatedAt.toDate() : data.updatedAt,
         } as GameTemplate;
       });
       setGameTemplates(fetchedTemplates);
@@ -130,14 +131,31 @@ const AdminGameTemplatesPage: React.FC = () => {
     setError(null); // ダイアログを閉じる際にエラーをリセット
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | { name?: string; value: unknown }>) => {
-    const { name, value, type, checked } = e.target;
-    // Selectコンポーネントからの変更を考慮
-    const val = type === 'checkbox' ? checked : value;
-
+  // TextField用のhandleChange
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { // ★修正
+    const { name, value } = e.target;
+    // 数値型への変換が必要なフィールドを特定 (sortOrderのみ)
+    const numericFields = ['sortOrder'];
     setCurrentTemplate((prev) => ({
       ...prev,
-      [name as string]: val,
+      [name as string]: numericFields.includes(name as string) ? Number(value) : value,
+    }));
+  };
+
+  // Selectコンポーネント用のhandleChange
+  const handleSelectChange = (event: SelectChangeEvent<GameName>) => { // ★追加
+    const { name, value } = event.target;
+    setCurrentTemplate(prev => ({
+      ...prev,
+      [name as string]: value as GameName, // GameNameに型アサーション
+    }));
+  };
+
+  // Switchコンポーネント用のhandleChange
+  const handleSwitchChange = (event: React.ChangeEvent<HTMLInputElement>) => { // ★追加
+    setCurrentTemplate(prev => ({
+        ...prev,
+        isActive: event.target.checked,
     }));
   };
 
@@ -311,7 +329,7 @@ const AdminGameTemplatesPage: React.FC = () => {
               name="gameType"
               value={currentTemplate.gameType}
               label="ゲームタイプ"
-              onChange={handleChange}
+              onChange={handleSelectChange} // ★修正
               sx={{ color: 'white', '& .MuiSelect-select': { backgroundColor: '#4a5568' }, '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' } }}
             >
               {GAME_NAME_OPTIONS.map((option) => (
@@ -353,7 +371,7 @@ const AdminGameTemplatesPage: React.FC = () => {
             control={
               <Switch
                 checked={currentTemplate.isActive}
-                onChange={handleChange}
+                onChange={handleSwitchChange} // ★修正
                 name="isActive"
                 color="primary"
                 sx={{ '& .MuiSwitch-switchBase.Mui-checked': { color: '#6366f1' }, '& .MuiSwitch-track': { backgroundColor: '#a0a0a0' } }}
@@ -366,7 +384,7 @@ const AdminGameTemplatesPage: React.FC = () => {
           <Button onClick={handleCloseDialog} color="primary" sx={{ color: 'slate.300', '&:hover': { bgcolor: 'slate.700' } }}>
             キャンセル
           </Button>
-          <Button onClick={handleSubmit} color="primary" variant="contained" disabled={isFormSubmitting} sx={{ bgcolor: 'indigo.600', '&:hover': { bgcolor: 'indigo.700' } }}>
+          <Button onClick={handleSubmit} color="primary" variant="contained" disabled={isFormSubmitting} sx={{ bgcolor: 'indigo.600', '&:hover': { bgcolor: 'indigo.700' } }}> // ★この行を修正
             {isFormSubmitting ? '処理中...' : (isEditing ? '更新' : '作成')}
           </Button>
         </DialogActions>

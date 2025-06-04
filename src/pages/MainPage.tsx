@@ -1,7 +1,7 @@
 // src/pages/MainPage.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
-import { UserData, Order, WithdrawalRequest, OrderStatus, WithdrawalRequestStatus } from '../types'; 
+import { UserData, Order, WithdrawalRequest, OrderStatus, WithdrawalRequestStatus } from '../types';
 import { getUser } from '../services/userService';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../services/firebase';
@@ -16,17 +16,17 @@ const formatTimestamp = (timestamp?: Timestamp | Date): string => {
   let dateToFormat: Date;
   if (timestamp instanceof Timestamp) dateToFormat = timestamp.toDate();
   else if (timestamp instanceof Date) dateToFormat = timestamp;
-  else { 
-    console.warn("formatTimestamp: 無効な型のタイムスタンプが渡されました:", timestamp); 
-    return '日付エラー'; 
+  else {
+    console.warn("formatTimestamp: 無効な型のタイムスタンプが渡されました:", timestamp);
+    return '日付エラー';
   }
   try {
-    return dateToFormat.toLocaleString('ja-JP', { 
-      year: 'numeric', month: 'short', day: 'numeric', 
-      hour: '2-digit', minute: '2-digit' 
+    return dateToFormat.toLocaleString('ja-JP', {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit'
     });
-  } catch (e) { 
-    console.error("formatTimestamp: toLocaleStringでエラー:", e, "元の値:", dateToFormat); 
+  } catch (e) {
+    console.error("formatTimestamp: toLocaleStringでエラー:", e, "元の値:", dateToFormat);
     return '表示エラー';
   }
 };
@@ -34,9 +34,9 @@ const formatTimestamp = (timestamp?: Timestamp | Date): string => {
 const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
   const { currentUser, loading: appContextLoading, refreshCurrentUser } = useAppContext();
   const navigate = useNavigate();
-  
+
   // ローカルのuserDataはAppContextのfirestoreDataのコピーとして、または初期値として持つ
-  const [userData, setUserData] = useState<UserData | null>(currentUser?.firestoreData || null); 
+  const [userData, setUserData] = useState<UserData | null>(currentUser?.firestoreData || null);
   const [loadingLocalUserData, setLoadingLocalUserData] = useState(false); // fetchUserData専用のローディング
   const [localUserDataError, setLocalUserDataError] = useState<string | null>(null); // fetchUserData専用のエラー
 
@@ -61,30 +61,30 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
   // この関数は、AppContextにfirestoreDataがない場合のフォールバックとしてのみ使用するか、
   // もしくはAppContextのrefreshCurrentUserで完全に代替する。
   const fetchLocalUserData = useCallback(async () => {
-    if (!currentUser?.uid) { 
-      setLoadingLocalUserData(false); 
-      return; 
+    if (!currentUser?.uid) {
+      setLoadingLocalUserData(false);
+      return;
     }
     if (currentUser.firestoreData) { // AppContextにデータがあればそれを使う
         setUserData(currentUser.firestoreData);
         setLoadingLocalUserData(false);
         return;
     }
-    setLoadingLocalUserData(true); 
+    setLoadingLocalUserData(true);
     setLocalUserDataError(null);
     try {
       const userDoc = await getUser(currentUser.uid);
-      if (userDoc) { 
-        setUserData(userDoc); 
-      } else { 
+      if (userDoc) {
+        setUserData(userDoc);
+      } else {
         console.warn('MainPage: fetchLocalUserData - Firestoreにユーザーデータが存在しませんでした。');
-        // setLocalUserDataError("ユーザーデータが見つかりませんでした。"); 
+        // setLocalUserDataError("ユーザーデータが見つかりませんでした。");
       }
     } catch (err: any) {
       console.error("MainPage: ローカルユーザー情報の取得に失敗:", err);
       setLocalUserDataError("ユーザー情報の読み込みに失敗しました。");
-    } finally { 
-      setLoadingLocalUserData(false); 
+    } finally {
+      setLoadingLocalUserData(false);
     }
   }, [currentUser?.uid, currentUser?.firestoreData]);
 
@@ -92,8 +92,8 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
     if (!appContextLoading && currentUser) {
         fetchLocalUserData(); // AppContextのロード後、またはcurrentUser変更時にローカルデータを更新
     } else if (!appContextLoading && !currentUser) {
-        setLoadingLocalUserData(false); 
-        setUserData(null); 
+        setLoadingLocalUserData(false);
+        setUserData(null);
     }
   }, [appContextLoading, currentUser, fetchLocalUserData]);
 
@@ -111,8 +111,8 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
 
       activeListenersCount++;
       const ordersRef = collection(db, "orders");
-      const qOrders = query(ordersRef, 
-        where("userId", "==", currentUser.uid), 
+      const qOrders = query(ordersRef,
+        where("userId", "==", currentUser.uid),
         where("orderStatus", "==", "delivered_awaiting_confirmation")
       );
       const unsubOrders = onSnapshot(qOrders, (snapshot) => {
@@ -130,18 +130,18 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
         setPendingConfirmationWithdrawals(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as WithdrawalRequest)));
         listenerLoaded();
       }, (error) => { console.error("確認待ちチップ引き出し取得エラー:", error); listenerLoaded();});
-      
+
       // pendingChipSettlementはAppContextのcurrentUser.firestoreDataから直接取得するので、ここではリスナー不要
       // もしAppContextのfirestoreDataがリアルタイム更新でないなら、ここでuserドキュメントを監視する
       // この例ではAppContextのデータが最新であると仮定し、追加のリスナーは設定しない
       // ただし、refreshCurrentUserが呼ばれたときにAppContextが更新されることを期待
 
-      return () => { 
-        unsubOrders(); 
-        unsubWithdrawals(); 
+      return () => {
+        unsubOrders();
+        unsubWithdrawals();
       };
     } else {
-      setPendingConfirmationOrders([]); 
+      setPendingConfirmationOrders([]);
       setPendingConfirmationWithdrawals([]);
       setLoadingConfirmations(false);
     }
@@ -158,9 +158,9 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       alert("ログアウトに失敗しました。");
     }
   };
-  
+
   const handleWithdrawalRequest = async () => {
-    if (!currentUser?.uid || !currentUser.firestoreData) { 
+    if (!currentUser?.uid || !currentUser.firestoreData) {
       setWithdrawalError("ユーザー情報が完全に読み込まれていません。"); return;
     }
     const currentChipBalance = currentUser.firestoreData.chips ?? 0;
@@ -179,9 +179,9 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
         requestedChipsAmount: amount,
       });
       setWithdrawalSuccess(`${amount.toLocaleString()}チップの引き出しをリクエストしました。管理者の承認をお待ちください。`);
-      setWithdrawalAmount(''); 
-      if (typeof refreshCurrentUser === 'function') { 
-        await refreshCurrentUser(); 
+      setWithdrawalAmount('');
+      if (typeof refreshCurrentUser === 'function') {
+        await refreshCurrentUser();
       }
     } catch (e: any) {
       console.error("チップ引き出しリクエスト失敗 (MainPage):", e);
@@ -194,7 +194,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
   const handleUserConfirm = async (itemIdOrUserId: string, itemType: 'order' | 'withdrawal' | 'chip_settlement') => {
     if (!currentUser?.uid) { alert("ログインしていません。"); return; }
     let confirmMessage = "";
-    let loadingKey = ""; 
+    let loadingKey = "";
 
     if (itemType === 'order') {
       confirmMessage = "商品の受け取りを確定しますか？";
@@ -218,7 +218,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       if (itemType === 'order') {
         const functions = getFunctions(undefined, 'asia-northeast1');
         const finalizeOrderFn = httpsCallable<
-          { orderId: string }, 
+          { orderId: string },
           { status: string; message: string }
         >(functions, 'finalizeDrinkOrderAndBill');
         const result = await finalizeOrderFn({ orderId: itemIdOrUserId });
@@ -227,8 +227,8 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
 
       } else if (itemType === 'withdrawal') {
         const docRef = doc(db, "withdrawalRequests", itemIdOrUserId);
-        await updateDoc(docRef, { 
-          status: "completed" as WithdrawalRequestStatus, 
+        await updateDoc(docRef, {
+          status: "completed" as WithdrawalRequestStatus,
           customerConfirmedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -236,7 +236,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       } else if (itemType === 'chip_settlement') {
         const functions = getFunctions(undefined, 'asia-northeast1');
         const confirmSettlementFn = httpsCallable< {}, { status: string; message: string }>(
-          functions, 
+          functions,
           'confirmAndFinalizeChipSettlement'
         );
         const result = await confirmSettlementFn(); // 引数なし
@@ -253,7 +253,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
     } catch (e: any) {
       console.error(`${itemType} 確認エラー (MainPage):`, e);
       let displayError = `確認処理に失敗しました: ${e.message || '不明なエラー'}`;
-      if (e.details) { 
+      if (e.details) {
         displayError += ` 詳細: ${JSON.stringify(e.details)}`;
       }
       alert(displayError);
@@ -263,7 +263,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
   };
 
   // ローディング表示の優先順位: AppContext -> MainPageローカル
-  if (appContextLoading) { 
+  if (appContextLoading) {
     return <div className="flex justify-center items-center min-h-screen bg-slate-900"><p className="text-xl text-neutral-lightest">アプリケーション読込中...</p></div>;
   }
   if (loadingLocalUserData && !currentUser?.firestoreData) { // AppContextにデータがなく、ローカルで取得中の場合
@@ -281,8 +281,8 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       </div>
     );
   }
-  
-  if (!currentUser || !currentUser.firestoreData) { 
+
+  if (!currentUser || !currentUser.firestoreData) {
     // この条件は、appContextLoadingがfalseで、かつcurrentUser.firestoreDataもない場合に該当
     // 通常、AppContext側でログインページへのリダイレクト等が行われるはず
     return <div className="text-center p-10 text-xl text-yellow-400">ユーザー情報が取得できませんでした。再度ログインしてください。</div>;
@@ -297,9 +297,14 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
           <h1 className="text-3xl font-bold text-red-500 mb-2 sm:mb-0">
             ようこそ、{displayUserData?.pokerName || currentUser.email?.split('@')[0] || 'プレイヤー'} さん
           </h1>
-          <button onClick={handleLogout} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded text-sm">
-            ログアウト
-          </button>
+          <div className="flex items-center space-x-3"> {/* 変更箇所: ヘッダーにマイプロフィールリンクを追加 */}
+            <Link to="/profile" className="text-sky-400 hover:text-sky-300 hover:underline text-sm whitespace-nowrap">
+              マイプロフィール
+            </Link>
+            <button onClick={handleLogout} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded text-sm">
+              ログアウト
+            </button>
+          </div>
         </div>
         {isStaffMode && ( <div className="bg-yellow-500 text-black p-2 rounded text-center font-semibold">スタッフモードで動作中</div> )}
       </header>
@@ -311,7 +316,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       {!loadingConfirmations && (pendingConfirmationOrders.length > 0 || pendingConfirmationWithdrawals.length > 0 || displayUserData?.pendingChipSettlement) && (
         <section className="my-8 p-6 bg-sky-800/70 rounded-lg shadow-lg border border-sky-600">
           <h2 className="text-2xl font-semibold text-sky-300 mb-4">受け取り/精算 確認待ちのアイテム</h2>
-          
+
           {pendingConfirmationOrders.map(order => (
             <div key={`confirm-order-${order.id}`} className="mb-3 p-3 bg-slate-700 rounded-md flex flex-col sm:flex-row justify-between items-center gap-2">
               <div>
@@ -352,7 +357,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
                  <p className="text-lg font-bold text-white">{displayUserData.pendingChipSettlement.adminEnteredTotalChips.toLocaleString()} チップ</p>
                  {displayUserData.pendingChipSettlement.denominationsCount && Object.keys(displayUserData.pendingChipSettlement.denominationsCount).length > 0 && (
                     <p className="text-xs text-orange-300">
-                        内訳: 
+                        内訳:
                         {Object.entries(displayUserData.pendingChipSettlement.denominationsCount)
                             .map(([denom, count]) => `${parseInt(denom).toLocaleString()}P x${count}`)
                             .join(' / ')}
@@ -415,7 +420,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
               <button
                 onClick={handleWithdrawalRequest}
                 disabled={isRequestingWithdrawal || !withdrawalAmount || parseInt(withdrawalAmount, 10) <= 0 || parseInt(withdrawalAmount, 10) > (displayUserData?.chips ?? 0)}
-                className={`px-6 py-2 font-semibold rounded-lg transition-colors 
+                className={`px-6 py-2 font-semibold rounded-lg transition-colors
                   ${isRequestingWithdrawal || !withdrawalAmount || parseInt(withdrawalAmount, 10) <= 0 || parseInt(withdrawalAmount, 10) > (displayUserData?.chips ?? 0)
                     ? 'bg-slate-500 text-slate-400 cursor-not-allowed'
                     : 'bg-sky-600 hover:bg-sky-700 text-white shadow-md'}`}
@@ -427,6 +432,10 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
            <div className="mt-8 flex flex-wrap gap-4">
             <Link to="/qr" className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-center transition duration-150 ease-in-out">マイQRコード</Link>
             {displayUserData && displayUserData.bill > 0 && (<Link to="/payment" className="inline-block bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-center transition duration-150 ease-in-out">お支払いへ</Link>)}
+            {/* 変更箇所: プロフィール編集へのリンクをボタンとして追加 */}
+            <Link to="/profile" className="inline-block bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg text-center transition duration-150 ease-in-out">
+              プロフィールを編集
+            </Link>
            </div>
         </section>
 

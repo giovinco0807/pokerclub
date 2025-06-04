@@ -1,0 +1,279 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for auth checks
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+    function isStaff() {
+      // staffカスタムクレームが存在し、trueである場合。
+      // もしFirestoreのusersドキュメントのisStaffフィールドで判定する場合は、
+      // get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isStaff == true のように変更。
+      return isSignedIn() && request.auth.token.staff == true;
+    }
+    function isAdminOrStaff() {
+      return isAdmin() || isStaff();
+    }
+
+    // ユーザー (users) コレクションのルール
+    match /users/{userId} {
+      allow read: if isAdmin() || isOwner(userId);
+      
+      function canCreateOwnUserDocument() {
+        return isSignedIn() &&
+               request.auth.uid == userId && // 自分のドキュメントのみ作成可能
+               request.resource.data.email == request.auth.token.email && // メールアドレスは認証情報と一致
+               request.resource.data.pokerName is string && request.resource.data.pokerName.size() > 0 &&
+               request.resource.data.fullName is string && request.resource.data.fullName.size() > 0 &&
+               request.resource.data.address is string && request.resource.data.address.size() > 0 &&
+               request.resource.data.phone is string && request.resource.data.phone.size() > 0 &&
+               request.resource.data.birthDate is string && request.resource.data.birthDate.size() == 8 &&
+               request.resource.data.idFrontUrl is string && request.resource.data.idFrontUrl.size() > 0 &&
+               // idBackUrl は任意だが、設定する場合は文字列
+               (request.resource.data.idBackUrl == null || request.resource.data.idBackUrl == "" || request.resource.data.idBackUrl is string) &&
+               // 初期値の設定を強制
+               request.resource.data.chips == 0 &&
+               request.resource.data.bill == 0 &&
+               request.resource.data.chipsInPlay == 0 &&
+               request.resource.data.isCheckedIn == false &&
+               request.resource.data.approved == false &&
+               request.resource.data.isStaff == false && // isStaffの初期値
+               request.resource.data.isAdmin == false && // isAdminの初期値 (カスタムクレームで別途管理)
+               // 作成時にユーザーが設定すべきでないフィールド
+               !('createdAt' in request.resource.data) && // サーバータイムスタンプで設定
+               !('updatedAt' in request.resource.data) && // サーバータイムスタンプで設定
+               !('pendingChipSettlement' in request.resource.data) &&
+               !('activeGameSessionId' in request.resource.data) &&
+               request.resource.data.avatarUrl == null &&
+               (request.resource.data.pendingAvatarUrl == null || request.resource.data.pendingAvatarUrl is string) &&
+               (request.resource.data.avatarApprovalStatus == null || request.resource.data.avatarApprovalStatus == 'pending') &&
+               request.resource.data.avatarApproved == false;
+      }
+      allow create: if canCreateOwnUserDocument();
+      
+      function canUpdateOwnProfile() {
+        let allowedFields = [
+          'pokerName', 'fullName', 'address', 'phone',
+          'birthDate', // 再提出を考慮しないなら更新不可にすることも検討
+          'idFrontUrl', 'idBackUrl', // 再提出を考慮しないなら更新不可にすることも検討
+          'pendingAvatarUrl', 'avatarApprovalStatus', 
+          'updatedAt' // 最終更新日時はクライアントからの直接更新は通常許可しない (サーバータイムスタンプで設定)
+        ];
+        return isOwner(userId) &&
+               request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFields) &&
+               request.resource.data.email == resource.data.email; // emailの変更は許可しない
+      }
+
+      function canAdminOrStaffUpdateUser() {
+        let modifiableFields = [
+          'approved', 'chips', 'bill', 'isCheckedIn', 'chipsInPlay',
+          'checkedInAt', 'checkedOutAt', 'currentTableId', 'currentSeatNumber',
+          'pokerName', 'fullName', 'isStaff', 
+          'address', 'phone', 'birthDate', 'idFrontUrl', 'idBackUrl',
+          'avatarUrl', 'pendingAvatarUrl', 'avatarApprovalStatus', 'avatarApproved',
+          'updatedAt', 'pendingChipSettlement', 'activeGameSessionId' 
+        ];
+        return isAdminOrStaff() &&
+               request.resource.data.diff(resource.data).affectedKeys().hasOnly(modifiableFields) &&
+               request.resource.data.email == resource.data.email; // emailの変更は許可しない
+      }
+      
+      allow update: if canUpdateOwnProfile() || canAdminOrStaffUpdateUser();
+      allow delete: if isAdmin(); // 削除は管理者のみ
+    }
+
+    // ドリンクメニューアイテム (drinkMenuItems) コレクションのルール
+    match /drinkMenuItems/{itemId} {
+      allow read: if isSignedIn(); 
+      allow write: if isAdmin(); 
+    }
+
+    // チップ購入オプション (chipPurchaseOptions) コレクションのルール
+    match /chipPurchaseOptions/{optionId} {
+      allow read: if isSignedIn(); 
+      allow write: if isAdmin(); 
+    }
+
+    // オーダー (orders) コレクションのルール
+    match /orders/{orderId} {
+      function isOrderOwner() { 
+        return isSignedIn() && request.auth.uid == resource.data.userId; 
+      }
+      function isValidOrderCreationData() {
+        return request.resource.data.userId == request.auth.uid && 
+               request.resource.data.orderStatus == "pending" &&
+               request.resource.data.items is list &&             
+               request.resource.data.items.size() > 0 &&           
+               request.resource.data.totalOrderPrice is number &&  
+               request.resource.data.totalOrderPrice >= 0 &&      
+               request.resource.data.orderedAt == request.time &&  
+               (!('paymentDetails' in request.resource.data) || request.resource.data.paymentDetails is map) &&
+               (!('userPokerName' in request.resource.data) || request.resource.data.userPokerName is string) &&
+               (!('userEmail' in request.resource.data) || request.resource.data.userEmail is string) &&
+               (!('tableNumber' in request.resource.data) || request.resource.data.tableNumber is string) &&
+               (!('seatNumber' in request.resource.data) || request.resource.data.seatNumber is string) &&
+               request.resource.data.userId is string &&
+               !('adminProcessedAt' in request.resource.data) &&
+               !('adminDeliveredAt' in request.resource.data) &&
+               !('customerConfirmedAt' in request.resource.data) &&
+               !('completedAt' in request.resource.data) &&
+               !('updatedAt' in request.resource.data);
+      }
+      allow create: if isSignedIn() && isValidOrderCreationData();
+      allow read: if isAdmin() || isOrderOwner();
+      
+      // ユーザーによる受取確認は finalizeDrinkOrderAndBill Function 経由で行うため、
+      // クライアントからの直接の 'completed' への更新ルールは不要、またはより厳格にする。
+      // 管理者による更新のみを許可する。
+      function canAdminUpdateOrder() {
+        let allowedFieldsByAdmin = [
+          'orderStatus', 'completedAt', 'notes', 
+          'paymentDetails', 
+          'updatedAt', 'adminProcessedAt', 'adminDeliveredAt', 
+          'customerConfirmedAt' // 管理者が代理で確認する場合
+        ];
+        return isAdmin() &&
+               request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFieldsByAdmin) &&
+               request.resource.data.userId == resource.data.userId && // ユーザーIDなどは変更不可
+               request.resource.data.totalOrderPrice == resource.data.totalOrderPrice &&
+               request.resource.data.orderedAt == resource.data.orderedAt;
+      }
+      allow update: if canAdminUpdateOrder();
+      allow delete: if isAdmin();
+    }
+
+    // テーブル (tables) コレクションと seats サブコレクションのルール
+    match /tables/{tableId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin(); 
+      match /seats/{seatId} {
+        allow read: if isSignedIn();
+        function canAdminOrStaffUpdateSeat() {
+          let allowedFields = ['userId', 'userPokerName', 'occupiedAt', 'status', 'currentStack'];
+          return isAdminOrStaff() &&
+                    (request.method == 'create' || 
+                     (request.method == 'update' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFields))
+                    );
+        }
+        allow write: if canAdminOrStaffUpdateSeat();
+      }
+    }
+
+    // お知らせ (announcements) コレクションのルール
+    match /announcements/{announcementId} {
+      allow get: if (isSignedIn() && resource.data.isPublished == true) || isAdmin();
+      allow list: if isAdmin(); 
+      allow write: if isAdmin();
+    }
+    
+    // チップ引き出しリクエスト (withdrawalRequests) コレクションのルール
+    match /withdrawalRequests/{requestId} {
+      function isWithdrawalRequestOwner() { 
+        return isSignedIn() && request.auth.uid == resource.data.userId; 
+      }
+      allow create: if isSignedIn() && 
+                    request.resource.data.userId == request.auth.uid &&
+                    request.resource.data.status == "pending_approval" &&
+                    request.resource.data.requestedChipsAmount is number && request.resource.data.requestedChipsAmount > 0 &&
+                    request.resource.data.requestedAt == request.time &&
+                    !('adminProcessedAt' in request.resource.data) &&
+                    !('adminDeliveredAt' in request.resource.data) &&
+                    !('customerConfirmedAt' in request.resource.data) &&
+                    !('processedBy' in request.resource.data) && 
+                    !('notes' in request.resource.data) &&
+                    !('updatedAt' in request.resource.data);
+
+      allow read: if isWithdrawalRequestOwner() || isAdminOrStaff(); 
+
+      function canAdminOrStaffUpdateWithdrawal() {
+        let allowedFields = ['status', 'processedBy', 'adminProcessedAt', 'notes', 'adminDeliveredAt', 'updatedAt'];
+        return isAdminOrStaff() &&
+               request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFields) &&
+               request.resource.data.userId == resource.data.userId && 
+               request.resource.data.requestedChipsAmount == resource.data.requestedChipsAmount && 
+               request.resource.data.requestedAt == resource.data.requestedAt; 
+      }
+      function canUserConfirmWithdrawalReceipt() {
+        let allowedFields = ['status', 'customerConfirmedAt', 'updatedAt'];
+        return isWithdrawalRequestOwner() && 
+               resource.data.status == "delivered_awaiting_confirmation" && 
+               request.resource.data.status == "completed" &&
+               request.resource.data.customerConfirmedAt == request.time &&
+               request.resource.data.diff(resource.data).affectedKeys().hasAll(allowedFields) &&
+               request.resource.data.diff(resource.data).affectedKeys().size() == allowedFields.size();
+      }
+      allow update: if canAdminOrStaffUpdateWithdrawal() || canUserConfirmWithdrawalReceipt();
+      allow delete: if isAdmin();
+    }
+
+    // gameTemplates コレクションのルール
+    // 管理者のみが作成、更新、削除できる
+    match /gameTemplates/{templateId} {
+      allow read: if isSignedIn(); // 認証済みユーザーなら誰でも読み取り可能 (テーブル情報などから参照されるため)
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // gameSessions コレクションのルール
+    match /gameSessions/{sessionId} {
+      // 作成: Firebase Functions (実質的に管理者/スタッフ権限) からのみ。
+      // FunctionはAdmin SDKを使うためルールをバイパスするが、クライアントからの直接作成を禁止するために
+      // より厳格な条件（例: 特定のカスタムクレームを持つFunctionからの呼び出しを示すフラグなど）を設けるか、
+      // もしくはFunction内でuserIdを強制設定し、そのuserIdとrequest.auth.uidの一致を求める。
+      // ここでは、Function内でuserIdを正しく設定することを前提とする。
+      allow create: if isSignedIn() && 
+                    request.resource.data.userId == request.auth.uid && // FunctionがユーザーのUIDで書き込む場合
+                    request.resource.data.sessionStartTime == request.time &&
+                    request.resource.data.chipsIn is number &&
+                    request.resource.data.totalChipsIn == request.resource.data.chipsIn &&
+                    request.resource.data.additionalChipsIn == 0 &&
+                    request.resource.data.tableId is string &&
+                    request.resource.data.seatNumber is number &&
+                    // 作成時に設定されるべきでないフィールド
+                    !('sessionEndTime' in request.resource.data) &&
+                    !('chipsOut' in request.resource.data) &&
+                    !('profit' in request.resource.data) &&
+                    !('durationMinutes' in request.resource.data) &&
+                    !('playFeeCalculated' in request.resource.data) &&
+                    request.resource.data.playFeeAppliedToBill == false;
+
+
+      // 読み取り: セッションの持ち主、または管理者/スタッフ
+      allow read: if isSignedIn() && 
+                   (resource.data.userId == request.auth.uid || 
+                    isAdmin() || 
+                    isStaff());
+      
+      // 更新: Firebase Functions (実質的に管理者/スタッフ権限) からのみ
+      // (主にセッション終了時の sessionEndTime, chipsOut, profit, playFee* などの更新)
+      function canAdminOrStaffUpdateGameSession() {
+        let allowedUpdateFields = [
+          'sessionEndTime', 'chipsOut', 'profit', 'durationMinutes', 
+          'playFeeCalculated', 'playFeeAppliedToBill', 
+          'additionalChipsIn', 'totalChipsIn' // セッション中のチップ追加も考慮
+        ];
+        // userId, tableId, seatNumber, gameTypePlayed, ratePlayed, sessionStartTime, chipsIn などは更新不可とする
+        return isAdminOrStaff() &&
+               request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedUpdateFields) &&
+               request.resource.data.userId == resource.data.userId && // これらのコア情報は変更不可
+               request.resource.data.tableId == resource.data.tableId &&
+               request.resource.data.seatNumber == resource.data.seatNumber &&
+               request.resource.data.gameTypePlayed == resource.data.gameTypePlayed &&
+               request.resource.data.ratePlayed == resource.data.ratePlayed &&
+               request.resource.data.sessionStartTime == resource.data.sessionStartTime &&
+               request.resource.data.chipsIn == resource.data.chipsIn;
+      }
+      allow update: if canAdminOrStaffUpdateGameSession();
+
+      // 削除: 管理者のみ (通常、ログは削除しない方が良い)
+      allow delete: if isAdmin();
+    }
+  }
+}
