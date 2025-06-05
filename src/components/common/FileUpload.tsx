@@ -1,15 +1,18 @@
+// src/components/common/FileUpload.tsx
 
 import React, { useState, useRef } from 'react';
 import Button from './Button';
 
-interface FileUploadProps {
+// ★★★ export を追加 ★★★
+export interface FileUploadProps {
   label: string;
   onFileSelect: (file: File | null, fileName: string | null) => void;
   accept?: string;
   id?: string;
+  // currentFileName?: string | null; // 既存のファイル名を表示する場合に追加 (任意)
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ label, onFileSelect, accept, id = "file-upload" }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ label, onFileSelect, accept, id = "file-upload" /*, currentFileName */ }) => {
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -51,8 +54,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ label, onFileSelect, accept, id
             {selectedFileName}
           </span>
         )}
+        {/* {currentFileName && !selectedFileName && ( // 既存のファイル名を表示する例
+          <span className="ml-3 text-sm text-slate-500 truncate max-w-xs">
+            現在のファイル: {currentFileName}
+          </span>
+        )} */}
       </div>
-      {!selectedFileName && <p className="text-xs text-neutral-light mt-1">ファイルが選択されていません。</p>}
+      {!selectedFileName && /* !currentFileName && */ <p className="text-xs text-neutral-light mt-1">ファイルが選択されていません。</p>}
     </div>
   );
 };

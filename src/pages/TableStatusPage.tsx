@@ -1,37 +1,60 @@
 // src/pages/TableStatusPage.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { db } from '../services/firebase';
-import { collection, query, orderBy, onSnapshot, Timestamp,getDocs } from 'firebase/firestore';
+// doc をインポートリストに追加
+import { collection, query, orderBy, onSnapshot, Timestamp, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
-// Table と Seat の型定義は src/types.ts からインポートする想定
-import { Table, Seat } from '../types'; // パスを調整してください
+import { Table, Seat, GameTemplate } from '../types';
 
 const TableStatusPage: React.FC = () => {
   const { currentUser, loading: appContextLoading } = useAppContext();
   const [tables, setTables] = useState<Table[]>([]);
   const [loadingTables, setLoadingTables] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [gameTemplatesMap, setGameTemplatesMap] = useState<Map<string, GameTemplate | null>>(new Map());
 
   const fetchTableData = useCallback(() => {
     setLoadingTables(true);
     setError(null);
 
     const tablesCollectionRef = collection(db, 'tables');
-    const qTables = query(tablesCollectionRef, orderBy('name')); // テーブル名でソート
+    const qTables = query(tablesCollectionRef, orderBy('name'));
 
     const unsubscribe = onSnapshot(qTables, async (tablesSnapshot) => {
-      const tablesDataPromises = tablesSnapshot.docs.map(async (tableDoc) => {
-        const tableData = { id: tableDoc.id, ...tableDoc.data() } as Omit<Table, 'seats'>;
-        const seatsCollectionRef = collection(db, 'tables', tableDoc.id, 'seats');
+      const tablesDataPromises = tablesSnapshot.docs.map(async (tableDocSnapshot) => { // 変数名を変更
+        const tableData = { id: tableDocSnapshot.id, ...tableDocSnapshot.data() } as Omit<Table, 'seats' | 'gameTemplate'>;
+        const seatsCollectionRef = collection(db, 'tables', tableDocSnapshot.id, 'seats');
         const seatsQuery = query(seatsCollectionRef, orderBy('seatNumber'));
-        const seatsSnapshot = await getDocs(seatsQuery); // onSnapshotではなくgetDocsで一度取得
+        const seatsSnapshot = await getDocs(seatsQuery);
         const seats = seatsSnapshot.docs.map(seatDoc => ({ id: seatDoc.id, ...seatDoc.data() } as Seat));
-        return { ...tableData, seats };
+
+        let gameTemplate: GameTemplate | null = null;
+        if (tableData.currentGameTemplateId) {
+          try {
+            // getDoc と doc を正しく使用
+            const templateDoc = await getDoc(doc(db, 'gameTemplates', tableData.currentGameTemplateId));
+            if (templateDoc.exists()) {
+              gameTemplate = { id: templateDoc.id, ...templateDoc.data() } as GameTemplate;
+            }
+          } catch (templateError) {
+            console.warn(`Error fetching game template ${tableData.currentGameTemplateId} for table ${tableData.id}:`, templateError);
+          }
+        }
+        return { ...tableData, seats, gameTemplate };
       });
       try {
         const resolvedTablesData = await Promise.all(tablesDataPromises);
         setTables(resolvedTablesData);
+
+        const newTemplatesMap = new Map<string, GameTemplate | null>();
+        resolvedTablesData.forEach(table => {
+          if (table.currentGameTemplateId && table.gameTemplate) {
+            newTemplatesMap.set(table.currentGameTemplateId, table.gameTemplate);
+          }
+        });
+        setGameTemplatesMap(newTemplatesMap);
+
       } catch (err: any) {
         console.error("卓状況の座席データ取得エラー:", err);
         setError("座席情報の取得中にエラーが発生しました。");
@@ -49,12 +72,10 @@ const TableStatusPage: React.FC = () => {
 
 
   useEffect(() => {
-    if (!appContextLoading && currentUser) { // ログインしていればテーブルデータを取得
+    if (!appContextLoading && currentUser) {
         const unsubscribe = fetchTableData();
         return () => {
-            if (typeof unsubscribe === 'function') {
-                unsubscribe();
-            }
+            unsubscribe();
         };
     } else if (!appContextLoading && !currentUser) {
         setError("テーブル状況を見るにはログインしてください。");
@@ -71,7 +92,7 @@ const TableStatusPage: React.FC = () => {
     return <div className="text-center p-10 text-xl text-red-400 bg-red-900/30 rounded-md">{error}</div>;
   }
 
-  if (!currentUser) { // ルートガードがあるはずだが念のため
+  if (!currentUser) {
     return <div className="text-center p-10 text-xl text-yellow-400">ログインが必要です。</div>;
   }
 
@@ -89,40 +110,49 @@ const TableStatusPage: React.FC = () => {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {tables.filter(table => table.status !== 'inactive').map(table => ( // 非アクティブは表示しない例
-          <div key={table.id} className="bg-slate-800 p-5 rounded-lg shadow-lg">
-            <h2 className="text-2xl font-semibold text-amber-400 mb-3">{table.name}</h2>
-            <p className="text-sm text-slate-400 mb-1">ゲーム: {table.gameType || '未設定'}</p>
-            <p className="text-sm text-slate-400 mb-4">状態:
-              <span className={`ml-2 px-2 py-0.5 text-xs font-semibold rounded-full
-                ${table.status === 'active' ? 'bg-green-600 text-green-100' :
-                  table.status === 'full' ? 'bg-red-600 text-red-100' : 'bg-slate-600 text-slate-100'}`}>
-                {table.status === 'active' ? 'プレイヤー募集中' : table.status === 'full' ? '満席' : table.status || '不明'}
-              </span>
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {Array.from({ length: table.maxSeats || 0 }, (_, i) => i + 1).map(seatNum => {
-                const seat = table.seats?.find(s => s.seatNumber === seatNum);
-                const isOccupied = seat && seat.userId;
-                return (
-                  <div
-                    key={seatNum}
-                    className={`p-3 rounded border h-20 flex flex-col items-center justify-center text-center
-                      ${isOccupied ? 'bg-red-700/30 border-red-600' : 'bg-green-700/20 border-green-600'}`}
-                    title={isOccupied ? `Seat ${seatNum}: ${seat.userPokerName || '不明'}` : `Seat ${seatNum}: 空席`}
-                  >
-                    <p className="font-semibold text-lg">S{seatNum}</p>
-                    {isOccupied ? (
-                      <p className="text-xs text-red-200 truncate w-full">{seat.userPokerName || 'プレイヤー'}</p>
-                    ) : (
-                      <p className="text-xs text-green-300">(空席)</p>
-                    )}
-                  </div>
-                );
-              })}
+        {tables.filter(table => table.status !== 'inactive').map(table => {
+          const templateInfo = table.currentGameTemplateId ? gameTemplatesMap.get(table.currentGameTemplateId) : null;
+          const displayGameType = templateInfo ? templateInfo.gameType : table.gameType;
+          const displayBlindsOrRate = templateInfo ? templateInfo.blindsOrRate : table.blindsOrRate;
+
+          return (
+            <div key={table.id} className="bg-slate-800 p-5 rounded-lg shadow-lg">
+              <h2 className="text-2xl font-semibold text-amber-400 mb-3">{table.name}</h2>
+              <p className="text-sm text-slate-400 mb-1">
+                ゲーム: {displayGameType || '未設定'}
+                {displayBlindsOrRate && ` (${displayBlindsOrRate})`}
+              </p>
+              <p className="text-sm text-slate-400 mb-4">状態:
+                <span className={`ml-2 px-2 py-0.5 text-xs font-semibold rounded-full
+                  ${table.status === 'active' ? 'bg-green-600 text-green-100' :
+                    table.status === 'full' ? 'bg-red-600 text-red-100' : 'bg-slate-600 text-slate-100'}`}>
+                  {table.status === 'active' ? 'プレイヤー募集中' : table.status === 'full' ? '満席' : table.status || '不明'}
+                </span>
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {Array.from({ length: table.maxSeats || 0 }, (_, i) => i + 1).map(seatNum => {
+                  const seat = table.seats?.find(s => s.seatNumber === seatNum);
+                  const isOccupied = seat && seat.userId;
+                  return (
+                    <div
+                      key={seatNum}
+                      className={`p-3 rounded border h-20 flex flex-col items-center justify-center text-center
+                        ${isOccupied ? 'bg-red-700/30 border-red-600' : 'bg-green-700/20 border-green-600'}`}
+                      title={isOccupied ? `Seat ${seatNum}: ${seat.userPokerName || '不明'}` : `Seat ${seatNum}: 空席`}
+                    >
+                      <p className="font-semibold text-lg">S{seatNum}</p>
+                      {isOccupied ? (
+                        <p className="text-xs text-red-200 truncate w-full">{seat.userPokerName || 'プレイヤー'}</p>
+                      ) : (
+                        <p className="text-xs text-green-300">(空席)</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

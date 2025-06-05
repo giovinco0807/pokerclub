@@ -1,14 +1,14 @@
-// src/contexts/AppContext.tsx (修正例)
+// src/contexts/AppContext.tsx
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { onAuthStateChanged, User as FirebaseUser, IdTokenResult } from 'firebase/auth';
-import { auth, db } from '../services/firebase'; // firebase.ts からインポート
+import { auth, db } from '../services/firebase';
 import { doc, getDoc, Timestamp } from 'firebase/firestore';
-import { UserData } from '../types'; // UserData型をインポート
+import { UserData } from '../types';
 
 export interface AppUser extends FirebaseUser {
   firestoreData?: UserData;
   isAdmin?: boolean;
-  isStaffClaim?: boolean; // staffクレームも保持する場合
+  isStaffClaim?: boolean;
 }
 
 export interface AppContextType {
@@ -16,8 +16,8 @@ export interface AppContextType {
   isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
-  refreshCurrentUser: () => Promise<void>; // ★★★ refreshCurrentUser の型定義を追加 ★★★
-  logout: () => Promise<void>; 
+  refreshCurrentUser: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -33,35 +33,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (userDocSnap.exists()) {
       return userDocSnap.data() as UserData;
     }
+    console.warn(`fetchFirestoreData: User document not found for UID: ${user.uid}`); // ユーザーが見つからない場合の警告
     return null;
   }, []);
 
-  // ★★★ refreshCurrentUser 関数の実装 ★★★
   const refreshCurrentUser = useCallback(async () => {
     const firebaseAuthUser = auth.currentUser;
     if (firebaseAuthUser) {
-      setLoading(true); // 再取得中のローディング表示
+      setLoading(true);
       try {
-        await firebaseAuthUser.reload(); // Firebase Authユーザー情報をリロード
-        const idTokenResult: IdTokenResult | undefined = await firebaseAuthUser.getIdTokenResult(true); // IDトークンを強制更新して最新のカスタムクレームを取得
+        await firebaseAuthUser.reload();
+        const idTokenResult: IdTokenResult | undefined = await firebaseAuthUser.getIdTokenResult(true);
         const firestoreData = await fetchFirestoreData(firebaseAuthUser);
-        
+
+        console.log("AppContext (refresh) - firebaseAuthUser:", firebaseAuthUser);
+        console.log("AppContext (refresh) - firestoreData:", firestoreData);
+
         setCurrentUser({
           ...firebaseAuthUser,
           firestoreData: firestoreData || undefined,
           isAdmin: idTokenResult?.claims.admin === true,
-          isStaffClaim: idTokenResult?.claims.staff === true, // staffクレームも考慮
+          isStaffClaim: idTokenResult?.claims.staff === true,
         });
         setError(null);
       } catch (e: any) {
         console.error("Error refreshing current user:", e);
         setError("ユーザー情報の更新に失敗しました。");
-        // ここで setCurrentUser(null) にするかどうかは要件による
       } finally {
         setLoading(false);
       }
+    } else {
+      console.log("refreshCurrentUser: No firebase auth user found.");
+      setCurrentUser(null); // ユーザーがいない場合はクリア
+      setLoading(false); // ローディングも解除
     }
-  }, [fetchFirestoreData]); // fetchFirestoreDataを依存配列に追加
+  }, [fetchFirestoreData]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseAuthUser) => {
@@ -70,26 +76,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (firebaseAuthUser) {
         try {
           const idTokenResult = await firebaseAuthUser.getIdTokenResult();
-          const firestoreData = await fetchFirestoreData(firebaseAuthUser);
+          const fetchedFirestoreData = await fetchFirestoreData(firebaseAuthUser);
+
+          console.log("AppContext (onAuthStateChanged) - firebaseAuthUser UID:", firebaseAuthUser.uid);
+          console.log("AppContext (onAuthStateChanged) - fetchedFirestoreData:", fetchedFirestoreData);
+          console.log("AppContext (onAuthStateChanged) - isAdmin claim:", idTokenResult.claims.admin);
+          console.log("AppContext (onAuthStateChanged) - isStaffClaim claim:", idTokenResult.claims.staff);
 
           setCurrentUser({
             ...firebaseAuthUser,
-            firestoreData: firestoreData || undefined,
+            firestoreData: fetchedFirestoreData || undefined,
             isAdmin: idTokenResult.claims.admin === true,
             isStaffClaim: idTokenResult.claims.staff === true,
           });
         } catch (e:any) {
           console.error("Auth state change - error fetching user data:", e);
           setError("ユーザーデータの読み込み中にエラーが発生しました。");
-          setCurrentUser(firebaseAuthUser); // 基本的なAuthユーザー情報だけでもセットする
+          // エラー時でも基本的なAuthユーザー情報だけでもセットする
+          const idTokenResultOnError = await firebaseAuthUser.getIdTokenResult().catch(() => undefined);
+          setCurrentUser({
+            ...firebaseAuthUser,
+            firestoreData: undefined, // Firestoreデータは取得失敗
+            isAdmin: idTokenResultOnError?.claims.admin === true,
+            isStaffClaim: idTokenResultOnError?.claims.staff === true,
+          });
         }
       } else {
+        console.log("AppContext (onAuthStateChanged) - No user, setting currentUser to null");
         setCurrentUser(null);
       }
       setLoading(false);
     });
     return () => unsubscribe();
-  }, [fetchFirestoreData]); // fetchFirestoreDataを依存配列に追加
+  }, [fetchFirestoreData]);
 
   const logout = useCallback(async () => {
     setLoading(true);
@@ -110,8 +129,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     isAuthenticated: !!currentUser,
     loading,
     error,
-    refreshCurrentUser, // ★★★ value に refreshCurrentUser を追加 ★★★
-    logout, // ★★★ logout を追加 ★★★
+    refreshCurrentUser,
+    logout,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -13,7 +13,7 @@ import { getFunctions, httpsCallable, HttpsCallableResult } from 'firebase/funct
 import UserDetailsModal, { StatusBadge } from '../components/admin/UserDetailsModal';
 import { getAllDrinkMenuItems, addDrinkMenuItem, updateDrinkMenuItem, deleteDrinkMenuItem } from '../services/menuService';
 import DrinkMenuForm, { DrinkMenuFormDataWithFile } from '../components/admin/DrinkMenuForm';
-import { UserData,UserWithId,DrinkMenuItem,ChipPurchaseOption,Category,Table, Seat, TableData, SeatData } from '../types';
+import { UserData,UserWithId,DrinkMenuItem,ChipPurchaseOption,Category,Table, Seat, TableData, SeatData, WaitingListEntry } from '../types'; // WaitingListEntry をインポート
 import { getAllTables, createTableWithSeats, updateTable, deleteTable, getSeatsForTable } from '../services/tableService';
 import TableEditForm, { TableFormData } from '../components/admin/TableEditForm';
 import SeatSelectionModal from '../components/admin/SeatSelectionModal';

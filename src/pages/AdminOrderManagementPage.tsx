@@ -9,18 +9,17 @@ import {
   onSnapshot,
   doc,
   updateDoc,
-  serverTimestamp, // serverTimestamp をインポート
-  Timestamp // Timestamp をインポート
+  serverTimestamp,
+  Timestamp
 } from 'firebase/firestore';
 import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import { Order, OrderItemData, WithdrawalRequest, WithdrawalRequestStatus, OrderStatus } from '../types';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
-type OrderStatusFilter = "pending" | "preparing" | "completed" | "cancelled" | "active" | "all" | "delivered_awaiting_confirmation";
+type OrderStatusFilter = "pending" | "preparing" | "completed" | "cancelled" | "active" | "all" | "delivered_awaiting_confirmation" | "failed"; // failed を追加
 type WithdrawalRequestFilter = "active_withdrawals" | "all_withdrawals";
 
-// StatusBadgeコンポーネントの定義 (以前のコードから)
 export const StatusBadge: React.FC<{ color: 'green' | 'red' | 'yellow' | 'blue' | 'sky' | 'slate' | 'purple'; text: string }> = ({ color, text }) => {
   const colorClasses = {
     green: 'bg-green-100 text-green-800 border border-green-300',
@@ -37,7 +36,7 @@ export const StatusBadge: React.FC<{ color: 'green' | 'red' | 'yellow' | 'blue' 
 
 const AdminOrderManagementPage: React.FC = () => {
   const { currentUser, loading: appContextLoading } = useAppContext();
-  
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [orderError, setOrderError] = useState<string | null>(null);
@@ -47,12 +46,12 @@ const AdminOrderManagementPage: React.FC = () => {
   const [loadingWithdrawals, setLoadingWithdrawals] = useState(true);
   const [withdrawalError, setWithdrawalError] = useState<string | null>(null);
   const [withdrawalRequestFilter, setWithdrawalRequestFilter] = useState<WithdrawalRequestFilter>("active_withdrawals");
-  
+
   const [actionLoading, setActionLoading] = useState<{[key: string]: boolean}>({});
 
   // --- Drink Orders Fetching ---
   useEffect(() => {
-    if (!appContextLoading && currentUser && currentUser.isAdmin) {
+    if (!appContextLoading && currentUser && (currentUser.isAdmin || currentUser.firestoreData?.isStaff)) { // スタッフもアクセス可能に
       setLoadingOrders(true);
       setOrderError(null);
       const ordersCollectionRef = collection(db, "orders");
@@ -74,7 +73,7 @@ const AdminOrderManagementPage: React.FC = () => {
         setLoadingOrders(false);
       });
       return () => unsubscribeOrders();
-    } else if (!appContextLoading && (!currentUser || !currentUser.isAdmin)) {
+    } else if (!appContextLoading && (!currentUser || (!currentUser.isAdmin && !currentUser.firestoreData?.isStaff))) { // スタッフ権限も考慮
       setOrderError("このページへのアクセス権限がありません。");
       setLoadingOrders(false);
     }
@@ -82,16 +81,16 @@ const AdminOrderManagementPage: React.FC = () => {
 
   // --- Chip Withdrawal Requests Fetching ---
   useEffect(() => {
-    if (!appContextLoading && currentUser && currentUser.isAdmin) {
+    if (!appContextLoading && currentUser && (currentUser.isAdmin || currentUser.firestoreData?.isStaff)) { // スタッフもアクセス可能に
       setLoadingWithdrawals(true);
       setWithdrawalError(null);
       const requestsCollectionRef = collection(db, "withdrawalRequests");
       let qWithdrawals;
       if (withdrawalRequestFilter === "active_withdrawals") {
-        qWithdrawals = query(requestsCollectionRef, 
-                              where("status", "in", ["pending_approval", "approved_preparing", "delivered_awaiting_confirmation"]), 
+        qWithdrawals = query(requestsCollectionRef,
+                              where("status", "in", ["pending_approval", "approved_preparing", "delivered_awaiting_confirmation"]),
                               orderBy("requestedAt", "asc"));
-      } else { 
+      } else {
         qWithdrawals = query(requestsCollectionRef, orderBy("requestedAt", "desc"));
       }
       const unsubscribeWithdrawals = onSnapshot(qWithdrawals, (querySnapshot) => {
@@ -104,8 +103,8 @@ const AdminOrderManagementPage: React.FC = () => {
         setLoadingWithdrawals(false);
       });
       return () => unsubscribeWithdrawals();
-    } else if (!appContextLoading && (!currentUser || !currentUser.isAdmin)) {
-      setWithdrawalError("このページへのアクセス権限がありません。"); 
+    } else if (!appContextLoading && (!currentUser || (!currentUser.isAdmin && !currentUser.firestoreData?.isStaff))) { // スタッフ権限も考慮
+      setWithdrawalError("このページへのアクセス権限がありません。");
       setLoadingWithdrawals(false);
     }
   }, [appContextLoading, currentUser, withdrawalRequestFilter]);
@@ -116,9 +115,10 @@ const AdminOrderManagementPage: React.FC = () => {
     if (!orderToUpdate) { alert("対象の注文が見つかりません。"); return; }
 
     const statusLabels: Record<OrderStatus, string> = {
-        pending: "新規受付", preparing: "準備中", 
+        pending: "新規受付", preparing: "準備中",
         delivered_awaiting_confirmation: "提供済み(ユーザー確認待ち)",
         completed: "完了", cancelled: "キャンセル",
+        failed: "失敗", // failed を追加
     };
     const confirmMessage = `${orderToUpdate.userPokerName || '注文'} のステータスを「${statusLabels[newStatus] || newStatus}」にしますか？`;
     if (!window.confirm(confirmMessage)) return;
@@ -126,16 +126,15 @@ const AdminOrderManagementPage: React.FC = () => {
     setActionLoading(prev => ({ ...prev, [orderId]: true }));
     try {
       const orderDocRef = doc(db, "orders", orderId);
-      // ★★★ 更新データの型を any にして FieldValue を許容 ★★★
-      const updateData: any = { 
-        orderStatus: newStatus, 
-        updatedAt: serverTimestamp() 
+      const updateData: any = {
+        orderStatus: newStatus,
+        updatedAt: serverTimestamp()
       };
       if (newStatus === "delivered_awaiting_confirmation") {
         updateData.adminDeliveredAt = serverTimestamp();
       }
-      if (newStatus === "completed" || newStatus === "cancelled") {
-        updateData.completedAt = serverTimestamp(); 
+      if (newStatus === "completed" || newStatus === "cancelled" || newStatus === "failed") { // failed も追加
+        updateData.completedAt = serverTimestamp();
       }
       await updateDoc(orderDocRef, updateData);
       alert(`注文ステータスを「${statusLabels[newStatus] || newStatus}」に更新しました。`);
@@ -154,11 +153,11 @@ const AdminOrderManagementPage: React.FC = () => {
     setActionLoading(prev => ({ ...prev, [requestId]: true }));
     try {
       const requestDocRef = doc(db, "withdrawalRequests", requestId);
-      // ★★★ 更新データの型を any にして FieldValue を許容 ★★★
       const updateData: any = {
         status: "approved_preparing" as WithdrawalRequestStatus,
-        adminProcessedAt: serverTimestamp(), // ★エラー発生箇所だった可能性あり(130行目付近)
+        adminProcessedAt: serverTimestamp(),
         processedBy: currentUser.uid,
+        updatedAt: serverTimestamp(), // updatedAtを追加
       };
       await updateDoc(requestDocRef, updateData);
       alert("リクエストを「承認して準備開始」状態に更新しました。");
@@ -180,17 +179,17 @@ const AdminOrderManagementPage: React.FC = () => {
     )) {
       return;
     }
-    
+
     setActionLoading(prev => ({ ...prev, [requestId]: true }));
     try {
       const functions = getFunctions(undefined, 'asia-northeast1');
       const dispenseChipsFunction = httpsCallable<{withdrawalRequestId: string}, {status: string, message: string }>(
-        functions, 
+        functions,
         'dispenseApprovedChipsAndMarkAsDelivered'
       );
-      
+
       const result = await dispenseChipsFunction({ withdrawalRequestId: requestId });
-      
+
       if (result.data.status === 'success') {
         alert(result.data.message || "チップの提供処理が完了し、ステータスが更新されました。");
       } else {
@@ -209,16 +208,16 @@ const AdminOrderManagementPage: React.FC = () => {
     const reason = window.prompt("リクエストを拒否します。理由を入力してください（任意）：");
     if (reason === null) { alert("拒否処理をキャンセルしました。"); return; }
     if (!window.confirm(`リクエストID: ${requestId.substring(0,8)}... を「拒否」しますか？\n理由: ${reason || '(理由なし)'}`)) return;
-    
+
     setActionLoading(prev => ({ ...prev, [requestId]: true }));
     try {
       const requestDocRef = doc(db, "withdrawalRequests", requestId);
-      // ★★★ 更新データの型を any にして FieldValue を許容 ★★★
       const updateData: any = {
         status: "denied" as WithdrawalRequestStatus,
-        adminProcessedAt: serverTimestamp(), // ★エラー発生箇所だった可能性あり(133行目付近)
+        adminProcessedAt: serverTimestamp(),
         processedBy: currentUser.uid,
         notes: reason || "",
+        updatedAt: serverTimestamp(), // updatedAtを追加
       };
       await updateDoc(requestDocRef, updateData);
       alert("リクエストを「拒否」状態に更新しました。");
@@ -242,7 +241,8 @@ const AdminOrderManagementPage: React.FC = () => {
   };
 
   if (appContextLoading) return <div className="text-center p-10 text-xl text-neutral-lightest">権限情報を読み込み中...</div>;
-  if (!currentUser || !currentUser.isAdmin) return <div className="text-center p-10 text-xl text-yellow-400">{orderError || withdrawalError || "アクセス権限がありません。"}</div>;
+  if (!currentUser || (!currentUser.isAdmin && !currentUser.firestoreData?.isStaff)) return <div className="text-center p-10 text-xl text-yellow-400">{orderError || withdrawalError || "アクセス権限がありません。"}</div>;
+
 
   return (
     <div className="container mx-auto p-4 sm:p-6 lg:p-8 text-neutral-lightest">
@@ -263,6 +263,7 @@ const AdminOrderManagementPage: React.FC = () => {
               <option value="delivered_awaiting_confirmation">提供済/確認待ち</option>
               <option value="completed">完了</option>
               <option value="cancelled">キャンセル</option>
+              <option value="failed">失敗</option>
               <option value="all">全オーダー</option>
             </select>
           </div>
@@ -275,9 +276,9 @@ const AdminOrderManagementPage: React.FC = () => {
       {/* チップ引き出しリクエスト表示セクション */}
       <section className="mb-12">
         <h2 className="text-2xl font-semibold text-amber-400 mb-4 border-b-2 border-amber-500 pb-2">チップ引き出しリクエスト (要対応)</h2>
-        {loadingWithdrawals ? ( <p className="text-slate-300 text-center py-6">リクエスト読込中...</p> ) : 
-         withdrawalError ? ( <p className="text-red-400 bg-red-900/30 p-3 rounded-md text-center">エラー: {withdrawalError}</p> ) : 
-         withdrawalRequests.length === 0 ? ( <p className="text-slate-400 text-center py-6">対応が必要なリクエストはありません。</p> ) : 
+        {loadingWithdrawals ? ( <p className="text-slate-300 text-center py-6">リクエスト読込中...</p> ) :
+         withdrawalError ? ( <p className="text-red-400 bg-red-900/30 p-3 rounded-md text-center">エラー: {withdrawalError}</p> ) :
+         withdrawalRequests.length === 0 ? ( <p className="text-slate-400 text-center py-6">対応が必要なリクエストはありません。</p> ) :
         (
           <div className="space-y-4">
             {withdrawalRequests.map(req => (
@@ -296,10 +297,10 @@ const AdminOrderManagementPage: React.FC = () => {
                         req.status === 'delivered_awaiting_confirmation' ? 'bg-sky-600 text-sky-100' :
                         req.status === 'completed' ? 'bg-green-600 text-green-100' :
                         req.status === 'denied' ? 'bg-red-600 text-red-100' : 'bg-gray-600 text-gray-100'}`}>
-                      {req.status === 'pending_approval' ? '承認待ち' : 
-                       req.status === 'approved_preparing' ? 'チップ準備中' : 
-                       req.status === 'delivered_awaiting_confirmation' ? '提供済/ユーザー確認待ち' : 
-                       req.status === 'completed' ? '完了' : 
+                      {req.status === 'pending_approval' ? '承認待ち' :
+                       req.status === 'approved_preparing' ? 'チップ準備中' :
+                       req.status === 'delivered_awaiting_confirmation' ? '提供済/ユーザー確認待ち' :
+                       req.status === 'completed' ? '完了' :
                        req.status === 'denied' ? '拒否済' : req.status}
                     </span>
                     {req.processedBy && <p className="text-xs text-slate-500 mt-1">処理者: {currentUser?.uid === req.processedBy ? "あなた" : req.processedBy.substring(0,6)+"..."}</p>}
@@ -332,9 +333,9 @@ const AdminOrderManagementPage: React.FC = () => {
       {/* ドリンク注文表示セクション */}
       <section>
         <h2 className="text-2xl font-semibold text-cyan-300 mb-4 border-b-2 border-cyan-500 pb-2">ドリンク等オーダー</h2>
-        {loadingOrders ? ( <p className="text-slate-300 text-center py-6">オーダー読込中...</p> ) : 
-         orderError && !withdrawalError ? ( <p className="text-red-400 bg-red-900/30 p-3 rounded-md text-center">エラー: {orderError}</p> ) : 
-         orders.length === 0 ? ( <p className="text-slate-400 text-center py-6">表示するオーダーはありません。</p> ) : 
+        {loadingOrders ? ( <p className="text-slate-300 text-center py-6">オーダー読込中...</p> ) :
+         orderError && !withdrawalError ? ( <p className="text-red-400 bg-red-900/30 p-3 rounded-md text-center">エラー: {orderError}</p> ) :
+         orders.length === 0 ? ( <p className="text-slate-400 text-center py-6">表示するオーダーはありません。</p> ) :
         (
           <div className="space-y-4">
             {orders.map(order => (
@@ -353,13 +354,16 @@ const AdminOrderManagementPage: React.FC = () => {
                         order.orderStatus === 'pending' ? 'bg-yellow-600 text-yellow-100' :
                         order.orderStatus === 'preparing' ? 'bg-blue-600 text-blue-100' :
                         order.orderStatus === 'delivered_awaiting_confirmation' ? 'bg-sky-600 text-sky-100' :
-                        order.orderStatus === 'completed' ? 'bg-green-600 text-green-100' : 
-                        order.orderStatus === 'cancelled' ? 'bg-red-600 text-red-100' : 'bg-gray-600 text-gray-100'}`}>
-                      {order.orderStatus === 'pending' ? '新規受付' : 
-                       order.orderStatus === 'preparing' ? '準備中' : 
-                       order.orderStatus === 'delivered_awaiting_confirmation' ? '提供済/確認待ち' : 
-                       order.orderStatus === 'completed' ? '完了' : 
-                       order.orderStatus === 'cancelled' ? 'キャンセル' : 
+                        order.orderStatus === 'completed' ? 'bg-green-600 text-green-100' :
+                        order.orderStatus === 'cancelled' ? 'bg-red-600 text-red-100' :
+                        order.orderStatus === 'failed' ? 'bg-red-700 text-red-200' : // failed のスタイル
+                        'bg-gray-600 text-gray-100'}`}>
+                      {order.orderStatus === 'pending' ? '新規受付' :
+                       order.orderStatus === 'preparing' ? '準備中' :
+                       order.orderStatus === 'delivered_awaiting_confirmation' ? '提供済/確認待ち' :
+                       order.orderStatus === 'completed' ? '完了' :
+                       order.orderStatus === 'cancelled' ? 'キャンセル' :
+                       order.orderStatus === 'failed' ? '失敗' : // failed の表示名
                        order.orderStatus}
                     </span>
                   </div>

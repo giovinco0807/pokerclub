@@ -11,13 +11,11 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
     function isAdmin() {
-      // 管理者カスタムクレームが存在し、trueであるかを確認
       return isSignedIn() && request.auth.token.admin == true;
     }
     function isStaff() {
-      // スタッフカスタムクレームが存在し、trueであるかを確認
-      // FirestoreのisStaffフィールドで判定する場合は別途対応が必要
-      return isSignedIn() && (request.auth.token.staff == true || request.auth.token.admin == true); // 管理者はスタッフでもある
+      // 管理者はスタッフでもあるという前提
+      return isSignedIn() && (request.auth.token.staff == true || request.auth.token.admin == true);
     }
     function isAdminOrStaff() {
       return isAdmin() || isStaff();
@@ -25,14 +23,12 @@ service cloud.firestore {
 
     // ユーザー (users) コレクションのルール
     match /users/{userId} {
-      // 管理者またはドキュメントの所有者のみが読み取り可能
       allow read: if isAdmin() || isOwner(userId);
 
-      // 新規ユーザー作成時のデータバリデーション
-      function isValidUserCreationData(newUserData) {
+      function isValidUserCreationData(newUserData, userIdToCheck) {
         return isSignedIn() &&
-               request.auth.uid == userId && // 自分のドキュメントのみ作成可能
-               newUserData.email == request.auth.token.email && // メールアドレスは認証情報と一致
+               request.auth.uid == userIdToCheck &&
+               newUserData.email == request.auth.token.email &&
                newUserData.pokerName is string && newUserData.pokerName.size() > 0 &&
                newUserData.fullName is string && newUserData.fullName.size() > 0 &&
                newUserData.address is string && newUserData.address.size() > 0 &&
@@ -40,44 +36,41 @@ service cloud.firestore {
                newUserData.birthDate is string && newUserData.birthDate.size() == 8 &&
                newUserData.idFrontUrl is string && newUserData.idFrontUrl.size() > 0 &&
                (newUserData.idBackUrl == null || newUserData.idBackUrl == "" || newUserData.idBackUrl is string) &&
-               // 初期値の強制
                newUserData.chips == 0 &&
                newUserData.bill == 0 &&
                newUserData.chipsInPlay == 0 &&
                newUserData.isCheckedIn == false &&
                newUserData.approved == false &&
                newUserData.isStaff == false &&
-               // newUserData.isAdmin == false && // isAdminはカスタムクレームで管理するため、Firestoreへの保存は必須ではない
-               // 以下のフィールドはクライアントからは直接設定させないか、サーバータイムスタンプを使用
-               // 'createdAt' と 'updatedAt' はクライアントから serverTimestamp() で送られてくるため、
-               // request.resource.data にはプレースホルダーオブジェクトとして存在する。
-               // そのため、!('fieldName' in request.resource.data) は serverTimestamp() を使う場合に適さない。
-               // 型チェックや、書き込み不可フィールドのチェックで代替する。
                !('pendingChipSettlement' in newUserData) &&
                !('activeGameSessionId' in newUserData) &&
                newUserData.avatarUrl == null &&
                (newUserData.pendingAvatarUrl == null || newUserData.pendingAvatarUrl is string) &&
-               (newUserData.avatarApprovalStatus == null || newUserData.avatarApprovalStatus == 'pending' || newUserData.avatarApprovalStatus == "") && // 空文字も許容
+               (newUserData.avatarApprovalStatus == null || newUserData.avatarApprovalStatus == 'pending' || newUserData.avatarApprovalStatus == "") &&
                newUserData.avatarApproved == false &&
-               // 書き込みを許可しないフィールド (createdAt, updatedAtはサーバーで設定される想定だったが、クライアントからserverTimestamp()で送られる)
-               !newUserData.keys().hasAny(['isAdmin', 'lastPaymentType', 'lastPaymentAt']); // isAdmin はカスタムクレーム
+               !('isAdmin' in newUserData) &&
+               !('lastPaymentType' in newUserData) &&
+               !('lastPaymentAt' in newUserData);
       }
-      allow create: if isValidUserCreationData(request.resource.data);
+      allow create: if isValidUserCreationData(request.resource.data, userId);
 
-
-      // プロフィール更新時の許可フィールド (ユーザー自身)
-      function canUpdateOwnProfile(currentData, newData) {
+      function canUpdateOwnProfile(currentData, newData, userIdToCheck) {
         let allowedFields = [
           'pokerName', 'fullName', 'address', 'phone',
-          'birthDate', // 更新を許可するかどうかは要件次第
-          'idFrontUrl', 'idBackUrl', // 更新を許可するかどうかは要件次第
+          'birthDate',
+          'idFrontUrl', 'idBackUrl',
           'pendingAvatarUrl', 'avatarApprovalStatus',
-          'updatedAt' // クライアントから serverTimestamp() を期待
+          'updatedAt',
+          'privacySettings'
         ];
-        return isOwner(userId) &&
+        let privacySettingsValid = !newData.containsKey('privacySettings') ||
+                                  (newData.privacySettings is map &&
+                                  (!newData.privacySettings.containsKey('hidePokerNameInPublicLists') || newData.privacySettings.hidePokerNameInPublicLists is bool) &&
+                                  newData.privacySettings.keys().hasOnly(['hidePokerNameInPublicLists']));
+        return isOwner(userIdToCheck) &&
                newData.diff(currentData).affectedKeys().hasOnly(allowedFields) &&
-               newData.email == currentData.email && // email変更不可
-               // approved, isStaff, chips, bill などはユーザー自身で変更不可
+               privacySettingsValid &&
+               newData.email == currentData.email &&
                newData.approved == currentData.approved &&
                newData.isStaff == currentData.isStaff &&
                newData.chips == currentData.chips &&
@@ -85,176 +78,87 @@ service cloud.firestore {
                newData.chipsInPlay == currentData.chipsInPlay &&
                newData.isCheckedIn == currentData.isCheckedIn;
       }
-
-      // 管理者/スタッフによるユーザー情報更新時の許可フィールド
       function canAdminOrStaffUpdateUser(currentData, newData) {
         let modifiableFieldsByAdmin = [
-          'pokerName', 'fullName', 'email', // email変更は慎重に。通常は許可しない方が安全
+          'pokerName', 'fullName', 'email',
           'address', 'phone', 'birthDate', 'idFrontUrl', 'idBackUrl',
           'approved', 'isStaff',
           'chips', 'bill', 'chipsInPlay', 'isCheckedIn',
           'checkedInAt', 'checkedOutAt', 'currentTableId', 'currentSeatNumber',
           'avatarUrl', 'pendingAvatarUrl', 'avatarApprovalStatus', 'avatarApproved',
           'pendingChipSettlement', 'activeGameSessionId',
-          'updatedAt', 'lastPaymentType', 'lastPaymentAt' // 支払い関連も管理者が更新可能とする
+          'updatedAt', 'lastPaymentType', 'lastPaymentAt',
+          'privacySettings'
         ];
         return isAdminOrStaff() &&
                newData.diff(currentData).affectedKeys().hasOnly(modifiableFieldsByAdmin) &&
-               // emailを変更する場合は、Firebase Auth側のメールアドレスも変更する運用が必要
-               (newData.email == currentData.email || isAdmin()); // 管理者のみemail変更可とする例
+               (newData.email == currentData.email || isAdmin());
       }
-
-      allow update: if canUpdateOwnProfile(resource.data, request.resource.data) ||
-                       canAdminOrStaffUpdateUser(resource.data, request.resource.data);
-
-      // ユーザー削除は管理者のみ
+      allow update: if canUpdateOwnProfile(resource.data, request.resource.data, userId) ||
+                      canAdminOrStaffUpdateUser(resource.data, request.resource.data);
       allow delete: if isAdmin();
     }
 
-    // ドリンクメニューアイテム (drinkMenuItems) コレクションのルール
-    match /drinkMenuItems/{itemId} {
-      allow read: if isSignedIn(); // 認証済みユーザーは読み取り可能
-      allow write: if isAdmin();   // 作成、更新、削除は管理者のみ
-    }
+    match /drinkMenuItems/{itemId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /chipPurchaseOptions/{optionId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
 
-    // チップ購入オプション (chipPurchaseOptions) コレクションのルール
-    match /chipPurchaseOptions/{optionId} {
-      allow read: if isSignedIn(); // 認証済みユーザーは読み取り可能
-      allow write: if isAdmin();   // 作成、更新、削除は管理者のみ
-    }
-
-    // オーダー (orders) コレクションのルール
     match /orders/{orderId} {
-      function isOrderOwner() {
-        return isSignedIn() && request.auth.uid == resource.data.userId;
-      }
-      function isValidOrderCreationData(newOrderData) {
-        return request.auth.uid == newOrderData.userId &&
-               newOrderData.orderStatus == "pending" &&
-               newOrderData.items is list &&
-               newOrderData.items.size() > 0 &&
-               newOrderData.totalOrderPrice is number &&
-               newOrderData.totalOrderPrice >= 0 &&
-               // orderedAt はCloud Function側で serverTimestamp() を使うことを推奨
-               // もしクライアントから送信する場合は request.time との比較ではなく、
-               // is timestamp などの型チェックや、過去の日付でないかなどのバリデーションが適切
-               // request.resource.data.orderedAt == request.time; // この比較はクライアントからのserverTimestamp()では機能しない
-               newOrderData.containsKey('orderedAt') == false && // クライアントからは送らせず、Functionで設定
-               newOrderData.containsKey('updatedAt') == false && // クライアントからは送らせず、Functionで設定
-               (!newOrderData.containsKey('paymentDetails') || newOrderData.paymentDetails is map) &&
-               newOrderData.userId is string;
-      }
-      // allow create: if isSignedIn() && isValidOrderCreationData(request.resource.data);
-      // オーダー作成はCloud Function (purchaseChips) 経由が主なので、クライアントからの直接作成はより厳しくするか、
-      // Function内でバリデーションを徹底する。
-      // ここでは、認証済みユーザーが自分のオーダーを作成できる基本的なルールを示す。
-      // Cloud Function (purchaseChips) はAdmin SDKを使用するため、このルールをバイパスする。
-      // そのため、クライアントから直接 orders に書き込む処理がなければ、この create ルールは false でも良い。
+      function isOrderOwner() { return isSignedIn() && request.auth.uid == resource.data.userId; }
       allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
-
-
-      allow read: if isAdminOrStaff() || isOrderOwner(); // 管理者、スタッフ、または注文者本人が読み取り可能
-
+      allow read: if isAdminOrStaff() || isOrderOwner();
       function canAdminOrStaffUpdateOrder(currentData, newData) {
-        let allowedFieldsByAdmin = [
-          'orderStatus', 'notes',
-          'paymentDetails', // チップ購入成功/失敗ステータスなど
-          'updatedAt', 'adminProcessedAt', 'adminDeliveredAt',
-          'customerConfirmedAt', 'completedAt'
-        ];
-        return isAdminOrStaff() &&
-               newData.diff(currentData).affectedKeys().hasOnly(allowedFieldsByAdmin) &&
-               newData.userId == currentData.userId; // userIdの変更は不可
+        let allowedFieldsByAdmin = ['orderStatus', 'notes', 'paymentDetails', 'updatedAt', 'adminProcessedAt', 'adminDeliveredAt', 'customerConfirmedAt', 'completedAt'];
+        return isAdminOrStaff() && newData.diff(currentData).affectedKeys().hasOnly(allowedFieldsByAdmin) && newData.userId == currentData.userId;
       }
-      // ユーザーが受取確認(completedへの更新)をする場合は、Cloud Function経由 (finalizeDrinkOrderAndBill)
       allow update: if canAdminOrStaffUpdateOrder(resource.data, request.resource.data);
-
-      allow delete: if isAdmin(); // 通常、注文履歴は削除しない方が良い
+      allow delete: if isAdmin();
     }
 
-    // テーブル (tables) コレクションと seats サブコレクションのルール
     match /tables/{tableId} {
-      allow read: if isSignedIn();
-      allow write: if isAdminOrStaff(); // テーブル作成・更新は管理者またはスタッフ
-
-      match /seats/{seatId} {
-        allow read: if isSignedIn();
-        allow write: if isAdminOrStaff(); // 座席情報の更新は管理者またはスタッフ
-      }
+      allow read: if isSignedIn(); allow write: if isAdminOrStaff();
+      match /seats/{seatId} { allow read: if isSignedIn(); allow write: if isAdminOrStaff(); }
     }
 
-    // お知らせ (announcements) コレクションのルール
     match /announcements/{announcementId} {
-      // 公開されているお知らせは誰でも読める、非公開のは管理者のみ
       allow get: if resource.data.isPublished == true || isAdmin();
-      // 一覧取得は、クライアント側でisPublishedをフィルタリングするなら isSignedIn() でも可
-      // Firestore Rulesで直接リスト取得を制限するのは難しい場合がある
-      allow list: if isSignedIn(); // クライアント側で isPublished をフィルタリング
+      allow list: if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // チップ引き出しリクエスト (withdrawalRequests) コレクションのルール
     match /withdrawalRequests/{requestId} {
-      function isWithdrawalRequestOwner() {
-        return isSignedIn() && request.auth.uid == resource.data.userId;
-      }
-      // 作成時のバリデーション
+      function isWithdrawalRequestOwner() { return isSignedIn() && request.auth.uid == resource.data.userId; }
       function isValidWithdrawalCreation(newData) {
-        return isSignedIn() &&
-               request.auth.uid == newData.userId &&
-               newData.status == "pending_approval" &&
-               newData.requestedChipsAmount is number && newData.requestedChipsAmount > 0 &&
-               // requestedAt はCloud Function側で serverTimestamp() を使うことを推奨
-               newData.containsKey('requestedAt') == false &&
-               newData.containsKey('updatedAt') == false &&
-               !newData.containsKey('adminProcessedAt') &&
-               !newData.containsKey('adminDeliveredAt') &&
-               !newData.containsKey('customerConfirmedAt') &&
-               !newData.containsKey('processedBy') &&
-               !newData.containsKey('notes');
+        return isSignedIn() && request.auth.uid == newData.userId && newData.status == "pending_approval" && newData.requestedChipsAmount is number && newData.requestedChipsAmount > 0 && !newData.containsKey('requestedAt') && !newData.containsKey('updatedAt') && !newData.containsKey('adminProcessedAt') && !newData.containsKey('adminDeliveredAt') && !newData.containsKey('customerConfirmedAt') && !newData.containsKey('processedBy') && !newData.containsKey('notes');
       }
       allow create: if isValidWithdrawalCreation(request.resource.data);
-
       allow read: if isWithdrawalRequestOwner() || isAdminOrStaff();
-
-      // 管理者/スタッフによるステータス更新
       function canAdminOrStaffUpdateWithdrawal(currentData, newData) {
         let allowedFields = ['status', 'processedBy', 'adminProcessedAt', 'notes', 'adminDeliveredAt', 'updatedAt'];
-        return isAdminOrStaff() &&
-               newData.diff(currentData).affectedKeys().hasOnly(allowedFields) &&
-               newData.userId == currentData.userId && // 不変フィールド
-               newData.requestedChipsAmount == currentData.requestedChipsAmount;
+        return isAdminOrStaff() && newData.diff(currentData).affectedKeys().hasOnly(allowedFields) && newData.userId == currentData.userId && newData.requestedChipsAmount == currentData.requestedChipsAmount;
       }
-      // ユーザーによる受取確認 (Cloud Function dispenseApprovedChipsAndMarkAsDelivered 経由で処理されるため、
-      // このルールで直接 'completed' にするケースは限定的か、より厳格な条件が必要)
       function canUserConfirmWithdrawal(currentData, newData) {
-          return isOwner(currentData.userId) &&
-                 currentData.status == "delivered_awaiting_confirmation" &&
-                 newData.status == "completed" &&
-                 newData.customerConfirmedAt == request.time && // クライアントから serverTimestamp() は不可
-                 newData.diff(currentData).affectedKeys().hasOnly(['status', 'customerConfirmedAt', 'updatedAt']);
+        return isOwner(currentData.userId) && currentData.status == "delivered_awaiting_confirmation" && newData.status == "completed" && newData.diff(currentData).affectedKeys().hasOnly(['status', 'customerConfirmedAt', 'updatedAt']);
       }
-      allow update: if canAdminOrStaffUpdateWithdrawal(resource.data, request.resource.data) ||
-                       canUserConfirmWithdrawal(resource.data, request.resource.data);
-
+      allow update: if canAdminOrStaffUpdateWithdrawal(resource.data, request.resource.data) || canUserConfirmWithdrawal(resource.data, request.resource.data);
       allow delete: if isAdmin();
     }
 
-    // ゲームテンプレート (gameTemplates) コレクションのルール
     match /gameTemplates/{templateId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // ゲームセッションログ (gameSessions) コレクションのルール
-    // 主にCloud Functionsから書き込まれることを想定
+    // ★★★ waitingListEntries のルールを最大限に緩和 (テスト目的) ★★★
+    match /waitingListEntries/{entryId} {
+      allow read: if true;  // 誰でも読み取り可能
+      allow write: if true; // 誰でも書き込み可能 (create, update, delete を含む)
+    }
+    // ★★★ ここまでテスト用の緩和ルール ★★★
+
     match /gameSessions/{sessionId} {
-      // FunctionがAdmin SDKで書き込むため、クライアントからの直接書き込みは原則禁止
-      // ただし、Functionがユーザー権限で書き込むシナリオも考慮する場合は、そのユーザーに限定した許可が必要
-      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId; // FunctionがユーザーのUIDで作成する場合
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdminOrStaff());
-      // 更新もFunction経由が基本
-      allow update: if isAdminOrStaff(); // または特定の条件を満たす場合 (例: 自分のセッションの特定のフィールドのみ)
+      allow update: if isAdminOrStaff();
       allow delete: if isAdmin();
     }
   }

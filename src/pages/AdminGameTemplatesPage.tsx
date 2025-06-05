@@ -19,6 +19,8 @@ import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../components/admin/AdminLayout';
 import { StatusBadge } from '../components/admin/UserDetailsModal';
+// import GameTemplateForm, { GameTemplateFormData } from '../components/admin/GameTemplateForm'; // まだ存在しない
+// import { getAllGameTemplates, addGameTemplate, updateGameTemplate, deleteGameTemplate } from '../services/gameTemplateService'; // まだ存在しない
 
 const gameTemplatesCollectionRef = collection(db, 'gameTemplates');
 
@@ -206,7 +208,7 @@ const AdminGameTemplatesPage: React.FC = () => {
       if (isEditing && currentTemplate.id) {
         const templateDocRef = doc(db, 'gameTemplates', currentTemplate.id);
         await updateDoc(templateDocRef, {
-          ...(dataToSave as Partial<GameTemplate>),
+          ...(dataToSave as Partial<GameTemplate>), // Firestoreに送るデータ型を調整
           updatedAt: serverTimestamp(),
         });
         alert('ゲームテンプレートを更新しました。');
@@ -360,7 +362,7 @@ const AdminGameTemplatesPage: React.FC = () => {
               <TextField fullWidth label="想定プレイ時間(分)" name="estimatedDurationMinutes" type="number" value={currentTemplate.estimatedDurationMinutes === undefined ? '' : currentTemplate.estimatedDurationMinutes} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
               <TextField fullWidth label="説明 (任意)" name="description" multiline rows={3} value={currentTemplate.description || ''} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
               <TextField fullWidth label="ユーザー向け補足 (任意)" name="notesForUser" multiline rows={2} value={currentTemplate.notesForUser || ''} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase }} variant="outlined"/>
-              <TextField fullWidth label="表示順 (任意、小さいほど先)" name="sortOrder" type="number" value={currentTemplate.sortOrder === undefined ? '' : currentTemplate.sortOrder} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
+              <TextField fullWidth label="表示順 (任意、整数、小さいほど先)" name="sortOrder" type="number" value={currentTemplate.sortOrder === undefined ? '' : currentTemplate.sortOrder} onChange={handleInputChange} InputLabelProps={{ sx: formComponentStyles.label }} InputProps={{ sx: formComponentStyles.inputBase, type: 'number' }} variant="outlined"/>
               <FormControlLabel
                 control={<Switch checked={currentTemplate.isActive === undefined ? true : currentTemplate.isActive} onChange={handleSwitchChange} name="isActive" sx={formComponentStyles.switchControl} />}
                 label={<Typography sx={formComponentStyles.formControlLabel}>ウェイティング受付中</Typography>}

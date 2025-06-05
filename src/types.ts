@@ -69,7 +69,14 @@ export interface UserData {
   // ★ 会計ボタン関連で追加 ★
   lastPaymentType?: string; // 例: 'cash_admin_reset'
   lastPaymentAt?: Timestamp;
+
+  privacySettings?: {
+    hidePokerNameInPublicLists?: boolean; // trueなら公開リストでポーカーネームを非表示
+  };
 }
+
+
+
 
 export interface UserWithId extends UserData {
   id: string;
@@ -241,28 +248,48 @@ export interface GameTemplate {
   updatedAt?: Timestamp | Date;
 }
 
-export type WaitingListEntryStatus = "waiting" | "called" | "seated" | "cancelled_by_user" | "cancelled_by_admin" | "no_show";
+// ★★★ ウェイティングリスト関連の型定義を追加 ★★★
+export type WaitingListEntryStatus =
+  | "waiting"           // 待機中
+  | "called"            // 呼び出し中 (ユーザー応答待ち)
+  | "confirmed"         // ユーザーが呼び出し確認済み（席へ案内待ち）
+  | "seated"            // 着席済み (このエントリーは完了扱い)
+  | "cancelled_by_user" // ユーザーによるキャンセル
+  | "cancelled_by_admin"// 管理者によるキャンセル
+  | "no_show";          // 呼び出し後、応答なし
 
 export interface WaitingListEntry {
-  id?: string; // Firestore document ID
+  id?: string;
   userId: string;
-  userPokerNameSnapshot?: string; // 登録時のポーカーネーム (表示用)
+  userPokerNameSnapshot?: string;
+  userAvatarUrlSnapshot?: string | null;
   gameTemplateId: string;
+  gameTemplateNameSnapshot?: string;
   requestedAt: Timestamp;
   status: WaitingListEntryStatus;
-  notes?: string;          // ユーザーからの備考
-  adminNotes?: string;     // 管理者からの備考
-  calledAt?: Timestamp;    // 呼び出し日時
-  seatedAt?: Timestamp;    // 着席日時 (実際にテーブルに着席した日時)
-  cancelledAt?: Timestamp; // キャンセル日時
-  callCount?: number;      // 呼び出し回数
+  notesForStaff?: string; // ★ ユーザーからの備考
+  // partySize?: number; // ★ 現状未使用のためコメントアウトまたは削除を検討
+  adminNotes?: string;
+  calledAt?: Timestamp | null;
+  confirmedAt?: Timestamp | null;
+  seatedAt?: Timestamp | null;
+  cancelledAt?: Timestamp | null;
+  lastStatusUpdatedAt?: Timestamp;
+  assignedTableId?: string | null;
+  assignedSeatNumber?: number | null;
+  callCount?: number;
+  estimatedWaitTimeMinutes?: number | null;
+  priority?: number;
+
+  isPokerNameHiddenSnapshot?: boolean;
 }
 
-// ウェイティングリスト表示用にユーザー情報を付加した型
-export interface WaitingListEntryWithUser extends WaitingListEntry {
+// ウェイティングリスト表示用にユーザー情報やゲームテンプレート情報を付加した型 (任意)
+export interface WaitingListEntryWithDetails extends WaitingListEntry {
   user?: UserWithId; // ユーザーの詳細情報 (任意で含める)
-  isCurrentUserCheckedIn?: boolean; // ★ ウェイティングリスト表示調整用 ★
+  gameTemplate?: GameTemplate; // ゲームテンプレートの詳細情報 (任意で含める)
 }
+// ★★★ ここまでウェイティングリスト関連の型定義 ★★★
 
 
 export interface GameSession {
