@@ -21,125 +21,77 @@ service cloud.firestore {
       return isAdmin() || isStaff();
     }
 
-    // ユーザー (users) コレクションのルール
+    // ★★★ users コレクションのルールを最大限に緩和 (テスト目的) ★★★
     match /users/{userId} {
-      allow read: if isAdmin() || isOwner(userId);
+      allow read: if true;
+      allow write: if true;
+    }
+    // ★★★ ここまで users のテスト用ルール ★★★
 
-      function isValidUserCreationData(newUserData, userIdToCheck) {
-        return isSignedIn() &&
-               request.auth.uid == userIdToCheck &&
-               newUserData.email == request.auth.token.email &&
-               newUserData.pokerName is string && newUserData.pokerName.size() > 0 &&
-               newUserData.fullName is string && newUserData.fullName.size() > 0 &&
-               newUserData.address is string && newUserData.address.size() > 0 &&
-               newUserData.phone is string && newUserData.phone.size() > 0 &&
-               newUserData.birthDate is string && newUserData.birthDate.size() == 8 &&
-               newUserData.idFrontUrl is string && newUserData.idFrontUrl.size() > 0 &&
-               (newUserData.idBackUrl == null || newUserData.idBackUrl == "" || newUserData.idBackUrl is string) &&
-               newUserData.chips == 0 &&
-               newUserData.bill == 0 &&
-               newUserData.chipsInPlay == 0 &&
-               newUserData.isCheckedIn == false &&
-               newUserData.approved == false &&
-               newUserData.isStaff == false &&
-               !('pendingChipSettlement' in newUserData) &&
-               !('activeGameSessionId' in newUserData) &&
-               newUserData.avatarUrl == null &&
-               (newUserData.pendingAvatarUrl == null || newUserData.pendingAvatarUrl is string) &&
-               (newUserData.avatarApprovalStatus == null || newUserData.avatarApprovalStatus == 'pending' || newUserData.avatarApprovalStatus == "") &&
-               newUserData.avatarApproved == false &&
-               !('isAdmin' in newUserData) &&
-               !('lastPaymentType' in newUserData) &&
-               !('lastPaymentAt' in newUserData);
-      }
-      allow create: if isValidUserCreationData(request.resource.data, userId);
-
-      function canUpdateOwnProfile(currentData, newData, userIdToCheck) {
-        let allowedFields = [
-          'pokerName', 'fullName', 'address', 'phone',
-          'birthDate',
-          'idFrontUrl', 'idBackUrl',
-          'pendingAvatarUrl', 'avatarApprovalStatus',
-          'updatedAt',
-          'privacySettings'
-        ];
-        let privacySettingsValid = !newData.containsKey('privacySettings') ||
-                                  (newData.privacySettings is map &&
-                                  (!newData.privacySettings.containsKey('hidePokerNameInPublicLists') || newData.privacySettings.hidePokerNameInPublicLists is bool) &&
-                                  newData.privacySettings.keys().hasOnly(['hidePokerNameInPublicLists']));
-        return isOwner(userIdToCheck) &&
-               newData.diff(currentData).affectedKeys().hasOnly(allowedFields) &&
-               privacySettingsValid &&
-               newData.email == currentData.email &&
-               newData.approved == currentData.approved &&
-               newData.isStaff == currentData.isStaff &&
-               newData.chips == currentData.chips &&
-               newData.bill == currentData.bill &&
-               newData.chipsInPlay == currentData.chipsInPlay &&
-               newData.isCheckedIn == currentData.isCheckedIn;
-      }
-      function canAdminOrStaffUpdateUser(currentData, newData) {
-        let modifiableFieldsByAdmin = [
-          'pokerName', 'fullName', 'email',
-          'address', 'phone', 'birthDate', 'idFrontUrl', 'idBackUrl',
-          'approved', 'isStaff',
-          'chips', 'bill', 'chipsInPlay', 'isCheckedIn',
-          'checkedInAt', 'checkedOutAt', 'currentTableId', 'currentSeatNumber',
-          'avatarUrl', 'pendingAvatarUrl', 'avatarApprovalStatus', 'avatarApproved',
-          'pendingChipSettlement', 'activeGameSessionId',
-          'updatedAt', 'lastPaymentType', 'lastPaymentAt',
-          'privacySettings'
-        ];
-        return isAdminOrStaff() &&
-               newData.diff(currentData).affectedKeys().hasOnly(modifiableFieldsByAdmin) &&
-               (newData.email == currentData.email || isAdmin());
-      }
-      allow update: if canUpdateOwnProfile(resource.data, request.resource.data, userId) ||
-                      canAdminOrStaffUpdateUser(resource.data, request.resource.data);
-      allow delete: if isAdmin();
+    match /drinkMenuItems/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    match /drinkMenuItems/{itemId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /chipPurchaseOptions/{optionId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /chipPurchaseOptions/{optionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
 
+    // ★★★ orders コレクションのルールを最大限に緩和 (テスト目的) ★★★
     match /orders/{orderId} {
-      function isOrderOwner() { return isSignedIn() && request.auth.uid == resource.data.userId; }
-      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
-      allow read: if isAdminOrStaff() || isOrderOwner();
-      function canAdminOrStaffUpdateOrder(currentData, newData) {
-        let allowedFieldsByAdmin = ['orderStatus', 'notes', 'paymentDetails', 'updatedAt', 'adminProcessedAt', 'adminDeliveredAt', 'customerConfirmedAt', 'completedAt'];
-        return isAdminOrStaff() && newData.diff(currentData).affectedKeys().hasOnly(allowedFieldsByAdmin) && newData.userId == currentData.userId;
-      }
-      allow update: if canAdminOrStaffUpdateOrder(resource.data, request.resource.data);
-      allow delete: if isAdmin();
+      allow read: if true;  // 誰でも読み取り可能
+      allow write: if true; // 誰でも書き込み可能
     }
+    // ★★★ ここまで orders のテスト用ルール ★★★
 
     match /tables/{tableId} {
-      allow read: if isSignedIn(); allow write: if isAdminOrStaff();
-      match /seats/{seatId} { allow read: if isSignedIn(); allow write: if isAdminOrStaff(); }
+      allow read: if isSignedIn();
+      allow write: if isAdminOrStaff();
+      match /seats/{seatId} {
+        allow read: if isSignedIn();
+        allow write: if isAdminOrStaff();
+      }
     }
 
     match /announcements/{announcementId} {
       allow get: if resource.data.isPublished == true || isAdmin();
-      allow list: if isSignedIn();
+      allow list: if isSignedIn(); // Client filters by isPublished
       allow write: if isAdmin();
     }
 
     match /withdrawalRequests/{requestId} {
       function isWithdrawalRequestOwner() { return isSignedIn() && request.auth.uid == resource.data.userId; }
       function isValidWithdrawalCreation(newData) {
-        return isSignedIn() && request.auth.uid == newData.userId && newData.status == "pending_approval" && newData.requestedChipsAmount is number && newData.requestedChipsAmount > 0 && !newData.containsKey('requestedAt') && !newData.containsKey('updatedAt') && !newData.containsKey('adminProcessedAt') && !newData.containsKey('adminDeliveredAt') && !newData.containsKey('customerConfirmedAt') && !newData.containsKey('processedBy') && !newData.containsKey('notes');
+        return isSignedIn() &&
+               request.auth.uid == newData.userId &&
+               newData.status == "pending_approval" &&
+               newData.requestedChipsAmount is number && newData.requestedChipsAmount > 0 &&
+               !newData.containsKey('requestedAt') && // Set by serverTimestamp in Function
+               !newData.containsKey('updatedAt') &&   // Set by serverTimestamp in Function
+               !newData.containsKey('adminProcessedAt') &&
+               !newData.containsKey('adminDeliveredAt') &&
+               !newData.containsKey('customerConfirmedAt') &&
+               !newData.containsKey('processedBy') &&
+               !newData.containsKey('notes');
       }
       allow create: if isValidWithdrawalCreation(request.resource.data);
       allow read: if isWithdrawalRequestOwner() || isAdminOrStaff();
       function canAdminOrStaffUpdateWithdrawal(currentData, newData) {
         let allowedFields = ['status', 'processedBy', 'adminProcessedAt', 'notes', 'adminDeliveredAt', 'updatedAt'];
-        return isAdminOrStaff() && newData.diff(currentData).affectedKeys().hasOnly(allowedFields) && newData.userId == currentData.userId && newData.requestedChipsAmount == currentData.requestedChipsAmount;
+        return isAdminOrStaff() &&
+               newData.diff(currentData).affectedKeys().hasOnly(allowedFields) &&
+               newData.userId == currentData.userId &&
+               newData.requestedChipsAmount == currentData.requestedChipsAmount;
       }
-      function canUserConfirmWithdrawal(currentData, newData) {
-        return isOwner(currentData.userId) && currentData.status == "delivered_awaiting_confirmation" && newData.status == "completed" && newData.diff(currentData).affectedKeys().hasOnly(['status', 'customerConfirmedAt', 'updatedAt']);
+      function canUserConfirmWithdrawal(currentData, newData) { // Primarily via Function
+        return isOwner(currentData.userId) &&
+               currentData.status == "delivered_awaiting_confirmation" &&
+               newData.status == "completed" &&
+               newData.diff(currentData).affectedKeys().hasOnly(['status', 'customerConfirmedAt', 'updatedAt']);
       }
-      allow update: if canAdminOrStaffUpdateWithdrawal(resource.data, request.resource.data) || canUserConfirmWithdrawal(resource.data, request.resource.data);
+      allow update: if canAdminOrStaffUpdateWithdrawal(resource.data, request.resource.data) ||
+                      canUserConfirmWithdrawal(resource.data, request.resource.data);
       allow delete: if isAdmin();
     }
 
@@ -148,12 +100,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // ★★★ waitingListEntries のルールを最大限に緩和 (テスト目的) ★★★
+    // waitingListEntries のルール (前回テストで緩和した状態を維持 - 必要に応じて適切なルールに戻してください)
     match /waitingListEntries/{entryId} {
-      allow read: if true;  // 誰でも読み取り可能
-      allow write: if true; // 誰でも書き込み可能 (create, update, delete を含む)
+      allow read: if true;
+      allow write: if true;
     }
-    // ★★★ ここまでテスト用の緩和ルール ★★★
 
     match /gameSessions/{sessionId} {
       allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;

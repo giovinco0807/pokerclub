@@ -1,14 +1,13 @@
 // src/pages/WaitingListsPage.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { db } from '../services/firebase';
-import { collection, query, where, orderBy, onSnapshot, Timestamp, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, Timestamp, getDocs, doc, getDoc } from 'firebase/firestore'; // onSnapshot はリアルタイム更新が不要な場合は削除可
 import { WaitingListEntry, GameTemplate, UserData, WaitingListEntryWithDetails } from '../types';
 import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import { Container, Typography, Box, Paper, Grid, CircularProgress, Alert, Chip } from '@mui/material';
 
-// formatTimestamp関数は不要になる可能性がありますが、他の箇所で使われていなければ削除してもOKです。
-// 今回はウェイティングリストの時刻表示のみ削除なので、一旦残します。
+// formatTimestamp関数 (MainPage.tsxにも同様の関数があるため、共通化を検討)
 const formatTimestamp = (timestamp?: Timestamp | Date | null, includeSeconds: boolean = false): string => {
   if (!timestamp) return 'N/A';
   let dateToFormat: Date;
@@ -30,7 +29,7 @@ const formatTimestamp = (timestamp?: Timestamp | Date | null, includeSeconds: bo
 interface GroupedWaitingList {
   gameTemplate: GameTemplate;
   entries: WaitingListEntryWithDetails[];
-  myPosition?: number;
+  myPosition?: number; // ログインユーザーの待ち順位
 }
 
 const WaitingListsPage: React.FC = () => {
@@ -40,36 +39,52 @@ const WaitingListsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const fetchWaitingListData = useCallback(async () => {
+    console.log("WaitingListsPage: fetchWaitingListData called. UID:", currentUser?.uid); // ログ追加
     setLoading(true);
     setError(null);
 
     try {
+      // 1. アクティブなゲームテンプレートを取得
       const templatesQuery = query(collection(db, "gameTemplates"), where("isActive", "==", true), orderBy("sortOrder", "asc"));
       const templatesSnapshot = await getDocs(templatesQuery);
       const activeTemplates = templatesSnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }) as GameTemplate);
+      console.log("WaitingListsPage: Fetched active templates:", activeTemplates.length);
+
 
       if (activeTemplates.length === 0) {
         setGroupedWaitingLists([]);
         setLoading(false);
+        console.log("WaitingListsPage: No active templates found.");
         return;
       }
 
+      // 2. 全ての "waiting" ステータスのウェイティングリストエントリーを取得
       const waitingEntriesQuery = query(collection(db, "waitingListEntries"), where("status", "==", "waiting"), orderBy("requestedAt", "asc"));
-      const entriesSnapshot = await getDocs(waitingEntriesQuery);
+      const entriesSnapshot = await getDocs(waitingEntriesQuery); // Line 101 / 105 (approx.)
       const allWaitingEntries = entriesSnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }) as WaitingListEntry);
+      console.log("WaitingListsPage: Fetched all waiting entries:", allWaitingEntries.length);
 
+
+      // 3. ユーザー情報を取得するためのヘルパー（キャッシュや最適化を検討）
       const userCache = new Map<string, UserData | null>();
       const fetchUserDetailsOptimized = async (userId: string): Promise<UserData | null> => {
         if (userCache.has(userId)) {
           return userCache.get(userId) || null;
         }
-        const userDocSnap = await getDoc(doc(db, 'users', userId));
-        const userData = userDocSnap.exists() ? userDocSnap.data() as UserData : null;
-        userCache.set(userId, userData);
-        return userData;
+        try {
+            const userDocSnap = await getDoc(doc(db, 'users', userId));
+            const userData = userDocSnap.exists() ? userDocSnap.data() as UserData : null;
+            userCache.set(userId, userData);
+            return userData;
+        } catch (userError) {
+            console.warn(`WaitingListsPage: Failed to fetch user details for ${userId}`, userError);
+            userCache.set(userId, null); // エラーでもキャッシュして再試行を防ぐ
+            return null;
+        }
       };
 
-      const newGroupedLists: GroupedWaitingList[] = await Promise.all(
+      // 4. ゲームテンプレートごとにエントリーをグループ化し、ユーザー情報を付加
+      let newGroupedLists: GroupedWaitingList[] = await Promise.all(
         activeTemplates.map(async (template) => {
           const entriesForTemplate = allWaitingEntries.filter(entry => entry.gameTemplateId === template.id);
           let myPositionInList: number | undefined = undefined;
@@ -83,7 +98,7 @@ const WaitingListsPage: React.FC = () => {
               return {
                 ...entry,
                 user: userDetails ? { id: entry.userId, ...userDetails } : undefined,
-                gameTemplate: template,
+                gameTemplate: template, // 親のテンプレート情報を付加
               };
             })
           );
@@ -96,17 +111,23 @@ const WaitingListsPage: React.FC = () => {
         })
       );
 
-      setGroupedWaitingLists(newGroupedLists.filter(group => group.entries.length > 0));
+      // 待ち人数が多い順にソート
+      newGroupedLists.sort((a, b) => b.entries.length - a.entries.length);
+
+      setGroupedWaitingLists(newGroupedLists.filter(group => group.entries.length > 0)); // エントリーがあるもののみ表示
+      console.log("WaitingListsPage: Grouped lists processed:", newGroupedLists.filter(group => group.entries.length > 0).length);
+
 
     } catch (err: any) {
-      console.error("ウェイティングリスト一覧取得エラー:", err);
+      console.error("ウェイティングリスト一覧取得エラー:", err); // Line 111 / 115 (approx.)
       setError("ウェイティングリスト情報の取得に失敗しました。");
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid]); // currentUser.uid に変更 (もしcurrentUserオブジェクト全体を監視すると無限ループの可能性)
 
   useEffect(() => {
+    console.log("WaitingListsPage: useEffect triggered. appContextLoading:", appContextLoading, "currentUser UID:", currentUser?.uid);
     if (!appContextLoading) {
       if (currentUser && currentUser.uid) {
         fetchWaitingListData();
@@ -115,7 +136,7 @@ const WaitingListsPage: React.FC = () => {
         setLoading(false);
       }
     }
-  }, [appContextLoading, currentUser, fetchWaitingListData]); // currentUser.uid を削除 (currentUserで十分)
+  }, [appContextLoading, currentUser, fetchWaitingListData]); // fetchWaitingListData を依存配列に追加
 
 
   if (appContextLoading || loading) {
@@ -192,20 +213,14 @@ const WaitingListsPage: React.FC = () => {
                       }}
                     >
                       <Typography sx={{ color: 'slate.400', mr: 1.5, fontWeight: 'medium' }}>{index + 1}.</Typography>
-                      {entry.userAvatarUrlSnapshot && !entry.isPokerNameHiddenSnapshot && (
+                      {entry.userAvatarUrlSnapshot && !entry.isPokerNameHiddenSnapshot && !(entry.user?.privacySettings?.hidePokerNameInPublicLists) && (
                         <img src={entry.userAvatarUrlSnapshot} alt="avatar" style={{ width: 24, height: 24, borderRadius: '50%', marginRight: 8 }}/>
                       )}
-                      <Typography sx={{ color: 'slate.200', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <Typography sx={{ color: 'text.primary', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {entry.isPokerNameHiddenSnapshot || entry.user?.privacySettings?.hidePokerNameInPublicLists
                           ? `プレイヤー ${index + 1}`
                           : entry.userPokerNameSnapshot || '参加者'}
                       </Typography>
-                      {/* ★★★ 受付時間の表示を削除 ★★★ */}
-                      {/*
-                      <Typography sx={{ color: 'slate.500', fontSize: '0.75rem' }}>
-                        {formatTimestamp(entry.requestedAt)}
-                      </Typography>
-                      */}
                     </Box>
                   ))}
                 </Box>

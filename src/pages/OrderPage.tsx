@@ -1,383 +1,401 @@
 // src/pages/OrderPage.tsx
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
-import {
-  getAvailableDrinkMenuItems,
-  getAvailableChipPurchaseOptions,
-} from '../services/menuService';
-import {
-  DrinkMenuItem,
-  ChipPurchaseOption,
-  CartItem,
-  CartDrinkItem,
-  CartChipItem,
-  OrderItemData,
-  Category, // DrinkMenuItemが使用
-} from '../types'; // types.ts からインポート
-
-import { db } from '../services/firebase'; // Firestoreインスタンス
-import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore'; // updateDoc を追加
-import { getFunctions, httpsCallable } from 'firebase/functions'; // HttpsCallableResult は通常不要
+import { DrinkMenuItem, ChipPurchaseOption, CartItem, Order, OrderItemData, OrderStatus } from '../types';
+import { getAllDrinkMenuItems, getAvailableChipPurchaseOptions } from '../services/menuService';
+import { Link, useNavigate } from 'react-router-dom';
+import { db, auth } from '../services/firebase';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { getFunctions, httpsCallable, HttpsCallableResult } from 'firebase/functions';
+import OrderMenuView from '../components/orders/OrderMenuView';
+import { CircularProgress, Typography, Box, Paper, Button as MuiButton, Alert, Tabs, Tab, Badge, Container, Grid, IconButton, useTheme } from '@mui/material';
+import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
+import RestartAltIcon from '@mui/icons-material/RestartAlt'; // 標準サイズに戻すアイコン例
+import ConfirmationModal, { ConfirmationModalProps } from '../components/common/ConfirmationModal';
 
 const OrderPage: React.FC = () => {
-  const { currentUser, loading: appContextLoading } = useAppContext(); // appContextLoading を取得
+  const { currentUser, loading: appContextLoading, refreshCurrentUser } = useAppContext();
   const navigate = useNavigate();
+  const theme = useTheme(); // Material UIのテーマを取得
 
-  const [drinkMenu, setDrinkMenu] = useState<DrinkMenuItem[]>([]);
-  const [chipOptions, setChipOptions] = useState<ChipPurchaseOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState('');
-
+  const [drinkMenuItems, setDrinkMenuItems] = useState<DrinkMenuItem[]>([]);
+  const [chipPurchaseOptions, setChipPurchaseOptions] = useState<ChipPurchaseOption[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [loadingMenu, setLoadingMenu] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [orderSuccessMessage, setOrderSuccessMessage] = useState<string | null>(null);
+
+  const [currentTab, setCurrentTab] = useState<'drinks' | 'chips'>('drinks');
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+
+  // 表示サイズ調整のための状態
+  const [scaleFactor, setScaleFactor] = useState(1);
+  const minScale = 0.8;
+  const maxScale = 1.5;
+  const scaleStep = 0.1;
 
   const fetchMenuData = useCallback(async () => {
-    if (!currentUser) {
-      setLoading(false);
-      setError("メニューを表示するにはログインしてください。");
-      return;
-    }
-    setLoading(true);
+    setLoadingMenu(true);
     setError(null);
     try {
       const [drinks, chips] = await Promise.all([
-        getAvailableDrinkMenuItems(),
-        getAvailableChipPurchaseOptions(),
+        getAllDrinkMenuItems(),
+        getAvailableChipPurchaseOptions()
       ]);
-      setDrinkMenu(drinks);
-      setChipOptions(chips);
+      setDrinkMenuItems(drinks);
+      setChipPurchaseOptions(chips);
     } catch (err: any) {
-      console.error("メニューデータの取得に失敗 (OrderPage):", err);
-      setError("メニューデータの読み込みに失敗しました。");
+      console.error("メニュー取得エラー (OrderPage):", err);
+      setError("メニューの読み込みに失敗しました。");
     } finally {
-      setLoading(false);
+      setLoadingMenu(false);
     }
-  }, [currentUser]);
+  }, []);
 
   useEffect(() => {
-    fetchMenuData();
-  }, [fetchMenuData]);
-
-  const handleAddToCart = (item: DrinkMenuItem | ChipPurchaseOption, type: 'drink' | 'chip') => {
-    setCart(prevCart => {
-      const itemId = item.id; 
-      if (!itemId) {
-        console.error("カート追加エラー: アイテムIDが存在しません。", item);
-        setError("カートにアイテムを追加できませんでした。アイテム情報が不完全です。");
-        return prevCart;
-      }
-
-      const existingItemIndex = prevCart.findIndex(cartItem => cartItem.id === itemId && cartItem.itemType === type);
-
-      if (existingItemIndex > -1) {
-        const updatedCart = [...prevCart];
-        updatedCart[existingItemIndex].quantity += 1;
-        return updatedCart;
+    if (!appContextLoading) {
+      if (currentUser) {
+        fetchMenuData();
       } else {
-        let newItem: CartItem;
-        if (type === 'drink') {
-          const drinkItem = item as DrinkMenuItem;
-          newItem = {
-            id: itemId,
-            name: drinkItem.name,
-            price: drinkItem.price,
-            quantity: 1,
-            itemType: 'drink',
-            category: drinkItem.category,
-            imageUrl: drinkItem.imageUrl,
-          };
-        } else { 
-          const chipItem = item as ChipPurchaseOption;
-          newItem = {
-            id: itemId,
-            name: chipItem.name,
-            price: chipItem.priceYen,
-            quantity: 1,
-            itemType: 'chip',
-            chipsAmount: chipItem.chipsAmount,
-          };
+        setError("注文機能を利用するにはログインが必要です。");
+        setLoadingMenu(false);
+      }
+    }
+  }, [appContextLoading, currentUser, fetchMenuData]);
+
+  const addToCart = (item: DrinkMenuItem | ChipPurchaseOption, itemType: 'drink' | 'chip') => {
+    setCart(prevCart => {
+      const existingItem = prevCart.find(cartItem => cartItem.id === item.id && cartItem.itemType === itemType);
+      if (existingItem) {
+        return prevCart.map(cartItem =>
+          cartItem.id === item.id && cartItem.itemType === itemType
+            ? { ...cartItem, quantity: cartItem.quantity + 1 }
+            : cartItem
+        );
+      } else {
+        if (itemType === 'drink') {
+          const drink = item as DrinkMenuItem;
+          return [...prevCart, { id: drink.id!, name: drink.name, price: drink.price, quantity: 1, itemType: 'drink', category: drink.category, imageUrl: drink.imageUrl }];
+        } else {
+          const chipOption = item as ChipPurchaseOption;
+          return [...prevCart, { id: chipOption.id!, name: chipOption.name, price: chipOption.priceYen, chipsAmount: chipOption.chipsAmount, quantity: 1, itemType: 'chip' }];
         }
-        return [...prevCart, newItem];
       }
     });
-    setSuccessMessage(`「${item.name}」をカートに追加しました。`);
-    setTimeout(() => setSuccessMessage(''), 2000);
+    setOrderSuccessMessage(null);
   };
 
-  const handleIncreaseQuantity = (cartItemId: string) => {
-    setCart(prevCart =>
-      prevCart.map(cartItem =>
-        (cartItem.id === cartItemId)
-          ? { ...cartItem, quantity: cartItem.quantity + 1 }
-          : cartItem
-      )
-    );
-  };
-
-  const handleDecreaseQuantity = (cartItemId: string) => {
+  const removeFromCart = (itemId: string, itemType: 'drink' | 'chip') => {
     setCart(prevCart => {
-      const itemIndex = prevCart.findIndex(cartItem => cartItem.id === cartItemId);
-      if (itemIndex === -1) return prevCart;
-      
-      const updatedCart = [...prevCart];
-      if (updatedCart[itemIndex].quantity > 1) {
-        updatedCart[itemIndex].quantity -= 1;
-        return updatedCart;
+      const existingItem = prevCart.find(cartItem => cartItem.id === itemId && cartItem.itemType === itemType);
+      if (existingItem && existingItem.quantity > 1) {
+        return prevCart.map(cartItem =>
+          cartItem.id === itemId && cartItem.itemType === itemType
+            ? { ...cartItem, quantity: cartItem.quantity - 1 }
+            : cartItem
+        );
       } else {
-        return updatedCart.filter((_, index) => index !== itemIndex);
+        return prevCart.filter(cartItem => !(cartItem.id === itemId && cartItem.itemType === itemType));
       }
     });
   };
 
-  const handleRemoveFromCart = (cartItemId: string) => {
-    setCart(prevCart => prevCart.filter(cartItem => cartItem.id !== cartItemId));
+  const clearCart = () => {
+    setCart([]);
   };
 
-  const cartTotal = useMemo(() => {
-    return cart.reduce((total, item) => total + (item.price * item.quantity), 0);
-  }, [cart]);
+  const getTotalPrice = () => {
+    return cart.reduce((total, item) => total + item.price * item.quantity, 0);
+  };
+  const getTotalItems = () => {
+    return cart.reduce((total, item) => total + item.quantity, 0);
+  };
 
   const handlePlaceOrder = async () => {
-    if (!currentUser || cart.length === 0) {
-      setError("カートが空か、ログインしていません。");
+    if (!currentUser || !currentUser.uid) {
+      setError("注文するにはログインが必要です。");
       return;
     }
-    setIsSubmittingOrder(true);
-    setError('');
-    setSuccessMessage('');
+    if (cart.length === 0) {
+      setError("カートが空です。");
+      return;
+    }
 
-    const itemsForFirestoreOrder: OrderItemData[] = [];
-    const itemsForChipPurchaseFunction: { chipOptionId: string; quantity: number }[] = [];
+    setIsConfirmModalOpen(false);
+    setPlacingOrder(true);
+    setError(null);
+    setOrderSuccessMessage(null);
 
-    cart.forEach(cartItem => {
-      itemsForFirestoreOrder.push({
-        itemId: cartItem.id,
-        itemName: cartItem.name,
-        quantity: cartItem.quantity,
-        unitPrice: cartItem.price,
-        totalItemPrice: cartItem.price * cartItem.quantity,
-        itemType: cartItem.itemType,
-        ...(cartItem.itemType === 'drink' && { itemCategory: (cartItem as CartDrinkItem).category }),
-        ...(cartItem.itemType === 'chip' && { chipsAmount: (cartItem as CartChipItem).chipsAmount }),
-      });
+    const orderItems: OrderItemData[] = cart.map(item => ({
+      itemId: item.id,
+      itemName: item.name,
+      itemCategory: item.itemType === 'drink' ? (item as any).category : null,
+      chipsAmount: item.itemType === 'chip' ? (item as any).chipsAmount : null,
+      quantity: item.quantity,
+      unitPrice: item.price,
+      totalItemPrice: item.price * item.quantity,
+      itemType: item.itemType,
+    }));
 
-      if (cartItem.itemType === 'chip') {
-        itemsForChipPurchaseFunction.push({
-          chipOptionId: cartItem.id,
-          quantity: cartItem.quantity,
-        });
-      }
-    });
+    const orderDataToSave: any = {
+      userId: currentUser.uid,
+      userPokerName: currentUser.firestoreData?.pokerName || currentUser.email?.split('@')[0] || '不明',
+      userEmail: currentUser.email || '',
+      items: orderItems,
+      totalOrderPrice: getTotalPrice(),
+      orderStatus: "pending",
+      orderedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
 
-    let orderDocId: string | null = null;
+    if (currentUser.firestoreData?.currentTableId) {
+      orderDataToSave.tableNumber = currentUser.firestoreData.currentTableId;
+    }
+    if (currentUser.firestoreData?.currentSeatNumber !== undefined && currentUser.firestoreData?.currentSeatNumber !== null) {
+      orderDataToSave.seatNumber = currentUser.firestoreData.currentSeatNumber.toString();
+    }
+
+    let tempOrderId: string | null = null;
 
     try {
-      if (itemsForFirestoreOrder.length > 0) {
-        const orderDataForFirestore = {
-          userId: currentUser.uid,
-          userPokerName: currentUser.firestoreData?.pokerName || currentUser.email?.split('@')[0] || '不明',
-          userEmail: currentUser.email || '',
-          items: itemsForFirestoreOrder,
-          totalOrderPrice: cartTotal,
-          orderStatus: "pending" as const,
-          orderedAt: serverTimestamp(),
-          paymentDetails: {}, 
-        };
-        const docRef = await addDoc(collection(db, "orders"), orderDataForFirestore);
-        orderDocId = docRef.id;
-        console.log("Order document created with ID:", orderDocId);
-      }
+      console.log("OrderPage: Attempting to place order with data to save:", orderDataToSave);
+      const orderDocRef = await addDoc(collection(db, 'orders'), orderDataToSave);
+      tempOrderId = orderDocRef.id;
+      console.log("OrderPage: Temporary order document created with ID:", tempOrderId);
 
-      if (itemsForChipPurchaseFunction.length > 0) {
-        // ★★★ Firebase Functions のリージョンを指定 ★★★
-        const functions = getFunctions(undefined, 'asia-northeast1'); 
-        const purchaseChipsCallable = httpsCallable< // 型名の重複を避けるためエイリアスは削除
-          { itemsToPurchase: { chipOptionId: string; quantity: number }[] },
-          { status: string; message: string; totalChipsAwarded?: number; totalPriceYen?: number }
-        >(functions, 'purchaseChips');
-        
-        console.log("Calling purchaseChips function with:", itemsForChipPurchaseFunction);
-        const result = await purchaseChipsCallable({ itemsToPurchase: itemsForChipPurchaseFunction });
-        const resultData = result.data;
+      const chipItemsInCart = cart.filter(item => item.itemType === 'chip');
+      if (chipItemsInCart.length > 0) {
+        console.log("OrderPage: Chip items found in cart, calling purchaseChipsAndFinalizeOrder function...");
+        const functions = getFunctions(undefined, 'asia-northeast1');
+        const purchaseChipsFunction = httpsCallable<
+            { orderId: string; cartItems: CartItem[]; userId: string; },
+            { success: boolean; message: string; orderId?: string; newBill?: number }
+        >(functions, 'purchaseChipsAndFinalizeOrder');
 
-        if (resultData.status === 'success') {
-          setSuccessMessage(`注文完了！ ${resultData.message}`);
-          if (orderDocId) {
-            const orderRef = doc(db, "orders", orderDocId);
-            await updateDoc(orderRef, {
-              orderStatus: itemsForFirestoreOrder.some(item => item.itemType === 'drink') ? "pending" : "completed",
-              "paymentDetails.chipPurchaseStatus": "success",
-              "paymentDetails.chipsAwarded": resultData.totalChipsAwarded,
-              "paymentDetails.chipsPriceYen": resultData.totalPriceYen,
-              "paymentDetails.chipResponseMessage": resultData.message,
-              updatedAt: serverTimestamp(),
-            });
+        const result = await purchaseChipsFunction({
+            orderId: tempOrderId,
+            cartItems: cart,
+            userId: currentUser.uid
+        });
+
+        if (result.data.success) {
+          setOrderSuccessMessage(result.data.message || "注文とチップ購入が完了しました！");
+          setCart([]);
+          if (refreshCurrentUser && typeof result.data.newBill === 'number') {
+             await refreshCurrentUser();
           }
         } else {
-          throw new Error(resultData.message || "チップ購入処理でFunctionがエラーを返しました。");
+          throw new Error(result.data.message || "チップ購入または注文処理に失敗しました。");
         }
-      } else if (itemsForFirestoreOrder.some(item => item.itemType === 'drink')) {
-        setSuccessMessage("ドリンクの注文を受け付けました！");
-         if (orderDocId) {
-            const orderRef = doc(db, "orders", orderDocId);
-            await updateDoc(orderRef, { orderStatus: "pending", updatedAt: serverTimestamp() });
-         }
       } else {
-        setError("注文する商品がありません。");
-        setIsSubmittingOrder(false);
-        return;
+        setOrderSuccessMessage("注文を受け付けました！準備ができるまでお待ちください。");
+        setCart([]);
+        if (refreshCurrentUser) await refreshCurrentUser();
       }
 
-      setCart([]); 
-      setTimeout(() => { 
-        setSuccessMessage(''); 
-      }, 4000);
-
-    } catch (e: any) {
-      console.error("注文処理エラー (OrderPage):", e); // ★ エラーログにファイル名を追加
-      let displayError = "注文処理中にエラーが発生しました。";
-      if (e.code && e.message) { 
-         displayError = `エラー (${e.code}): ${e.message}`;
-      } else if (e.message) {
-        displayError = e.message; // Firebase Functionからのカスタムエラーメッセージなど
-      }
-      setError(displayError);
-      if (orderDocId) {
+    } catch (err: any) {
+      console.error("注文処理エラー (OrderPage):", err);
+      setError(`注文処理に失敗しました: ${err.message || '不明なエラーが発生しました。'}`);
+      if (tempOrderId) {
         try {
-            const orderRef = doc(db, "orders", orderDocId);
-            await updateDoc(orderRef, { 
-                orderStatus: "failed", 
-                "paymentDetails.chipPurchaseStatus": "failed",
-                "paymentDetails.error": e.message || "Unknown error during order processing",
-                updatedAt: serverTimestamp(),
-            });
-        } catch (updateError) {
-            console.error("Failed to update order status to 'failed' (OrderPage):", updateError); // ★ エラーログにファイル名を追加
+          console.log(`OrderPage: Attempting to update order ${tempOrderId} status to 'failed'`);
+          await updateDoc(doc(db, 'orders', tempOrderId), {
+            orderStatus: "failed" as OrderStatus,
+            updatedAt: serverTimestamp(),
+            paymentDetails: { error: err.message || 'Unknown failure reason' }
+          });
+          console.log(`OrderPage: Successfully updated order ${tempOrderId} to 'failed'`);
+        } catch (updateError: any) {
+          console.error(`Failed to update order status to 'failed' (OrderPage):`, updateError);
         }
       }
     } finally {
-      setIsSubmittingOrder(false);
+      setPlacingOrder(false);
     }
   };
 
-  // appContextLoading とローカルの loading state の両方を考慮
-  if (appContextLoading || loading) { 
-    return <div className="text-center p-10 text-xl text-slate-300">情報を読み込み中...</div>;
+  // フォントサイズをスケールファクターに基づいて調整するヘルパー関数
+  const getScaledFontSize = (baseFontSize: string | number): string => {
+    if (typeof baseFontSize === 'number') {
+      return `${baseFontSize * scaleFactor}px`;
+    }
+    // '1rem', '16px'のような文字列形式の場合、数値部分を抽出してスケールする
+    const match = baseFontSize.match(/^(\d+\.?\d*)(.*)$/);
+    if (match) {
+      const value = parseFloat(match[1]);
+      const unit = match[2];
+      return `${value * scaleFactor}${unit}`;
+    }
+    return baseFontSize.toString(); // フォールバック
+  };
+
+
+  if (appContextLoading || loadingMenu) {
+    return <Container sx={{py:4, display: 'flex', justifyContent:'center', alignItems:'center', flexDirection:'column'}}><CircularProgress sx={{mb:2}} /> <Typography>メニューを読み込み中...</Typography></Container>;
   }
-  
-  if (!currentUser && !appContextLoading) { // appContextLoading完了後、currentUserがいなければエラー
-      return <div className="text-center p-10 text-xl text-yellow-400">{error || "このページを表示するにはログインが必要です。"}</div>;
+  if (error && !currentUser) {
+     return <Container sx={{py:4}}><Alert severity="warning">{error} <Link to="/login" className="underline hover:text-sky-300">ログインページへ</Link></Alert></Container>;
   }
-  
+  if (error) {
+     return <Container sx={{py:4}}><Alert severity="error">{error}</Alert></Container>;
+  }
+  if (!currentUser) {
+    return <Container sx={{py:4}}><Alert severity="info">注文機能を利用するにはログインが必要です。 <Link to="/login" className="underline hover:text-sky-300">ログイン</Link></Alert></Container>;
+  }
+
+
   return (
-    <div className="container mx-auto p-4 sm:p-6 lg:p-8 text-neutral-lightest">
-      <div className="flex justify-between items-center mb-8 pb-3 border-b border-slate-700">
-        <h1 className="text-3xl font-bold text-red-500">ご注文メニュー</h1>
-        <Link to="/" className="text-sky-400 hover:text-sky-300 hover:underline text-sm">← メインページに戻る</Link>
-      </div>
+    // sx の color: 'neutral.lightest' を削除し、テーマから継承
+    <Container maxWidth="lg" sx={{ py: getScaledFontSize(theme.spacing(4)) /* パディングもスケール */ }}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{
+        fontWeight: 'bold',
+        color: 'primary.main', // テーマのプライマリカラーを使用
+        mb: getScaledFontSize(theme.spacing(3)),
+        fontSize: getScaledFontSize(theme.typography.h4.fontSize!)
+      }}>
+        オーダー
+      </Typography>
 
-      {successMessage && <div className="mb-4 p-3 bg-green-700/80 text-white rounded-md text-sm fixed top-20 right-5 z-50 shadow-lg animate-fadeIn">{successMessage}</div>}
-      {error && <div className="mb-4 p-3 bg-red-700/80 text-white rounded-md text-sm fixed top-20 right-5 z-50 shadow-lg animate-fadeIn">{error}</div>}
+      {/* 表示サイズ調整ボタン */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}>
+        <Typography sx={{fontSize: getScaledFontSize(theme.typography.body2.fontSize!)}}>表示サイズ:</Typography>
+        <IconButton onClick={() => setScaleFactor(prev => Math.max(minScale, prev - scaleStep))} size="small" title="小さくする">
+          <ZoomOutIcon sx={{fontSize: getScaledFontSize(theme.typography.h6.fontSize!)}} />
+        </IconButton>
+        <MuiButton onClick={() => setScaleFactor(1)} size="small" variant="outlined" sx={{fontSize: getScaledFontSize(theme.typography.button.fontSize!), p:getScaledFontSize(theme.spacing(0.5))}}>
+          標準
+        </MuiButton>
+        <IconButton onClick={() => setScaleFactor(prev => Math.min(maxScale, prev + scaleStep))} size="small" title="大きくする">
+          <ZoomInIcon sx={{fontSize: getScaledFontSize(theme.typography.h6.fontSize!)}} />
+        </IconButton>
+      </Box>
 
-      {/* カート表示セクション */}
-      {cart.length > 0 && (
-        <section className="mb-10 p-6 bg-slate-700 rounded-lg shadow-md">
-          <h2 className="text-xl font-semibold text-green-400 mb-4">現在のカート ({cart.reduce((sum, item) => sum + item.quantity, 0)}点)</h2>
-          <ul className="space-y-3 mb-4 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-            {cart.map(item => (
-              <li key={`${item.itemType}-${item.id}`} className="flex justify-between items-center border-b border-slate-600 pb-2 last:border-b-0">
-                <div className="flex-grow min-w-0">
-                  <p className="text-white font-medium truncate pr-2" title={item.name}>{item.name}</p>
-                  <p className="text-xs text-slate-400">単価: {item.price.toLocaleString()}円 x {item.quantity}点</p>
-                </div>
-                <div className="flex items-center flex-shrink-0">
-                    <p className="text-sm text-amber-400 mr-3 w-20 text-right">{(item.price * item.quantity).toLocaleString()}円</p>
-                    <button onClick={() => handleDecreaseQuantity(item.id)} className="px-2 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-lg font-bold">-</button>
-                    <span className="px-2 text-white">{item.quantity}</span>
-                    <button onClick={() => handleIncreaseQuantity(item.id)} className="px-2 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-lg font-bold">+</button>
-                    <button onClick={() => handleRemoveFromCart(item.id)} className="ml-2 text-red-500 hover:text-red-400 text-xs">削除</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="text-right mb-4 mt-4 pt-4 border-t border-slate-600">
-            <p className="text-xl font-bold text-white">合計: <span className="text-green-400">{cartTotal.toLocaleString()}円</span></p>
-          </div>
-          <button
-            onClick={handlePlaceOrder}
-            disabled={isSubmittingOrder || cart.length === 0}
-            className={`w-full px-6 py-3 font-semibold rounded-lg transition-colors text-lg ${isSubmittingOrder || cart.length === 0 ? 'bg-slate-500 text-slate-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 text-white shadow-md hover:shadow-lg'}`}
-          >
-            {isSubmittingOrder ? '注文処理中...' : `この内容で注文する (${cartTotal.toLocaleString()}円)`}
-          </button>
-        </section>
-      )}
+      {orderSuccessMessage && <Alert severity="success" sx={{mb:2, fontSize: getScaledFontSize(theme.typography.body2.fontSize!)}} onClose={() => setOrderSuccessMessage(null)}>{orderSuccessMessage}</Alert>}
+      {error && !orderSuccessMessage && <Alert severity="error" sx={{mb:2, fontSize: getScaledFontSize(theme.typography.body2.fontSize!)}} onClose={() => setError(null)}>{error}</Alert>}
 
-      {/* ドリンクメニューセクション */}
-      <section className="mb-12">
-        <h2 className="text-2xl font-semibold text-amber-400 mb-6">ドリンク</h2>
-        {appContextLoading || loading && !drinkMenu.length ? (<p className="text-slate-400">ドリンクメニューを読み込み中...</p>) : 
-         !loading && drinkMenu.length === 0 ? (<p className="text-slate-400">現在ご注文いただけるドリンクはありません。</p>) :
-        (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {drinkMenu.map(item => (
-              <div key={item.id} className="bg-slate-800 p-5 rounded-lg shadow-lg hover:shadow-red-500/20 transition-shadow duration-300 flex flex-col justify-between">
-                <div>
-                  {item.imageUrl && (
-                    <img src={item.imageUrl} alt={item.name} className="w-full h-40 object-cover rounded mb-3 shadow-md" 
-                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                  )}
-                  {!item.imageUrl && <div className="w-full h-40 bg-slate-700 rounded mb-3 flex items-center justify-center text-slate-500 text-sm">画像なし</div>}
-                  <h3 className="text-xl font-semibold text-white mb-1 truncate" title={item.name}>{item.name}</h3>
-                  <p className="text-sm text-slate-400 mb-1">{item.category}</p>
-                  {item.description && <p className="text-xs text-slate-500 my-2 leading-relaxed h-12 overflow-y-auto custom-scrollbar">{item.description}</p>}
-                </div>
-                <div className="mt-auto pt-3">
-                  <p className="text-2xl font-bold text-amber-300 mb-3">{item.price.toLocaleString()} 円</p>
-                  <button 
-                    onClick={() => handleAddToCart(item, 'drink')} 
-                    className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50"
-                  >
-                    カートに追加
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
-      {/* チップ購入セクション */}
-      <section>
-        <h2 className="text-2xl font-semibold text-green-400 mb-6">チップ購入</h2>
-        {appContextLoading || loading && !chipOptions.length ? (<p className="text-slate-400">チップオプションを読み込み中...</p>) :
-         !loading && chipOptions.length === 0 ? (<p className="text-slate-400">現在購入可能なチップオプションはありません。</p>) :
-        (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {chipOptions.map(option => (
-              <div key={option.id} className="bg-slate-800 p-5 rounded-lg shadow-lg hover:shadow-green-500/20 transition-shadow duration-300 flex flex-col justify-between">
-                <div>
-                  <h3 className="text-xl font-semibold text-white mb-1 truncate" title={option.name}>{option.name}</h3>
-                  <p className="text-2xl font-bold text-green-300 my-2">{option.chipsAmount.toLocaleString()} チップ</p>
-                  {option.description && <p className="text-xs text-slate-500 my-2 h-10 overflow-y-auto custom-scrollbar">{option.description}</p>}
-                </div>
-                <div className="mt-auto pt-3">
-                  <p className="text-xl font-bold text-green-300 mb-3">{option.priceYen.toLocaleString()}円</p>
-                  <button 
-                    onClick={() => handleAddToCart(option, 'chip')} 
-                    className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50"
-                  >
-                    カートに追加
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
+      <Grid container spacing={getScaledFontSize(theme.spacing(3))}>
+        <Grid item xs={12} md={8}>
+          <Paper sx={{
+            p:0, // OrderMenuView内部でパディングを制御するため0に
+            bgcolor:'slate.800',
+            boxShadow:2,
+            borderRadius: 2,
+            overflow:'hidden'
+          }}>
+            <Tabs
+                value={currentTab}
+                onChange={(e, newValue) => setCurrentTab(newValue as 'drinks' | 'chips')}
+                indicatorColor="secondary"
+                textColor="inherit"
+                variant="fullWidth"
+                sx={{ bgcolor: 'slate.700', borderBottom: 1, borderColor: 'slate.600',
+                      '& .MuiTab-root': {
+                        color: 'slate.300',
+                        fontWeight:'medium',
+                        fontSize: getScaledFontSize(theme.typography.button.fontSize!),
+                        '&.Mui-selected': {color: 'secondary.main'}
+                      }
+                }}
+            >
+                <Tab label="ドリンク・フード" value="drinks" />
+                <Tab label="チップ購入" value="chips" />
+            </Tabs>
+            <Box sx={{p: getScaledFontSize(theme.spacing(2))}}>
+            {currentTab === 'drinks' && (
+                <OrderMenuView items={drinkMenuItems} onItemSelect={(item) => addToCart(item, 'drink')} itemType="drink" scaleFactor={scaleFactor} />
+            )}
+            {currentTab === 'chips' && (
+                <OrderMenuView items={chipPurchaseOptions} onItemSelect={(item) => addToCart(item, 'chip')} itemType="chip" scaleFactor={scaleFactor} />
+            )}
+            </Box>
+          </Paper>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <Paper sx={{
+            p: getScaledFontSize(theme.spacing(2.5)),
+            bgcolor:'slate.800',
+            boxShadow:2,
+            borderRadius: 2,
+            position: 'sticky',
+            top: getScaledFontSize(theme.spacing(8.75)) // 70px をテーマのスペーシングとスケールで調整 (70/8 = 8.75)
+            }}>
+            <Typography variant="h6" sx={{
+                color: 'sky.400',
+                mb:getScaledFontSize(theme.spacing(2)),
+                borderBottom:1,
+                borderColor:'slate.700',
+                pb:getScaledFontSize(theme.spacing(1)),
+                fontSize: getScaledFontSize(theme.typography.h6.fontSize!)
+            }}>
+                現在のカート <Badge badgeContent={getTotalItems()} color="secondary" sx={{ml:1}}><ShoppingCartIcon sx={{fontSize: getScaledFontSize(theme.typography.h6.fontSize!)}}/></Badge>
+            </Typography>
+            {cart.length === 0 ? (
+              <Typography sx={{color:'slate.400', textAlign:'center', py:getScaledFontSize(theme.spacing(3)), fontSize: getScaledFontSize(theme.typography.body1.fontSize!)}}>カートは空です。</Typography>
+            ) : (
+              <>
+                <Box sx={{
+                    maxHeight: `calc(100vh - ${getScaledFontSize(400)})`, // 400px部分もスケール
+                    overflowY:'auto',
+                    pr:getScaledFontSize(theme.spacing(1)),
+                    mb:getScaledFontSize(theme.spacing(2)),
+                    '&::-webkit-scrollbar': {width:getScaledFontSize(6)},
+                    '&::-webkit-scrollbar-thumb': {backgroundColor:'slate.600', borderRadius:getScaledFontSize(3)}
+                  }}>
+                {cart.map(item => (
+                  <Paper key={`${item.itemType}-${item.id}`} sx={{
+                    display:'flex',
+                    justifyContent:'space-between',
+                    alignItems:'center',
+                    mb:getScaledFontSize(theme.spacing(1.5)),
+                    p:getScaledFontSize(theme.spacing(1.5)),
+                    bgcolor:'slate.700/70',
+                    borderRadius:1
+                    }}>
+                    <Box>
+                      <Typography sx={{color:'slate.100', fontWeight:'medium', fontSize:getScaledFontSize(theme.typography.body2.fontSize!)}}>{item.name}</Typography>
+                      <Typography sx={{color:'slate.400', fontSize:getScaledFontSize(theme.typography.caption.fontSize!)}}>
+                        {item.price.toLocaleString()}円 x {item.quantity}
+                        {item.itemType === 'chip' && ` (${(item as any).chipsAmount.toLocaleString()}チップ)`}
+                      </Typography>
+                    </Box>
+                    <Box sx={{display:'flex', alignItems:'center'}}>
+                      <MuiButton size="small" variant="outlined" onClick={() => removeFromCart(item.id, item.itemType)} sx={{minWidth:getScaledFontSize(30), p:getScaledFontSize(theme.spacing(0.25)), borderColor:'slate.500', color:'slate.300', mr:getScaledFontSize(theme.spacing(1)), fontSize: getScaledFontSize(theme.typography.button.fontSize!)}}>-</MuiButton>
+                      <Typography sx={{minWidth:getScaledFontSize(20), textAlign:'center', color:'slate.200', fontSize: getScaledFontSize(theme.typography.body2.fontSize!)}}>{item.quantity}</Typography>
+                      <MuiButton size="small" variant="outlined" onClick={() => addToCart(item.itemType === 'drink' ? drinkMenuItems.find(d=>d.id===item.id)! : chipPurchaseOptions.find(c=>c.id===item.id)!, item.itemType)} sx={{minWidth:getScaledFontSize(30), p:getScaledFontSize(theme.spacing(0.25)), borderColor:'slate.500', color:'slate.300', ml:getScaledFontSize(theme.spacing(1)), fontSize: getScaledFontSize(theme.typography.button.fontSize!)}}>+</MuiButton>
+                    </Box>
+                  </Paper>
+                ))}
+                </Box>
+                <Box sx={{borderTop:1, borderColor:'slate.700', pt:getScaledFontSize(theme.spacing(2)), mt:getScaledFontSize(theme.spacing(2))}}>
+                <Typography variant="h6" sx={{color:'slate.200', mb:getScaledFontSize(theme.spacing(1)), fontSize: getScaledFontSize(theme.typography.h6.fontSize!)}}>合計: <span className="font-bold text-amber-400">{getTotalPrice().toLocaleString()}円</span></Typography>
+                <MuiButton variant="contained" color="secondary" fullWidth onClick={() => setIsConfirmModalOpen(true)} disabled={placingOrder} sx={{py:getScaledFontSize(theme.spacing(1.2)), fontWeight:'bold', bgcolor:'success.main', '&:hover':{bgcolor:'success.dark'}, fontSize: getScaledFontSize(theme.typography.button.fontSize!)}}>
+                  {placingOrder ? <CircularProgress size={getScaledFontSize(24)} color="inherit"/> : '注文を確定する'}
+                </MuiButton>
+                {cart.length > 0 && (
+                  <MuiButton variant="text" fullWidth onClick={clearCart} sx={{mt:getScaledFontSize(theme.spacing(1)), color:'slate.400', fontSize:getScaledFontSize(theme.typography.caption.fontSize!), '&:hover':{bgcolor:'slate.700'}}}>カートを空にする</MuiButton>
+                )}
+                </Box>
+              </>
+            )}
+          </Paper>
+        </Grid>
+      </Grid>
+      <ConfirmationModal
+        open={isConfirmModalOpen}
+        onClose={() => setIsConfirmModalOpen(false)}
+        onConfirm={handlePlaceOrder}
+        title="注文内容の確認"
+        message={`合計 ${getTotalPrice().toLocaleString()}円の注文を確定しますか？\nチップ購入が含まれる場合、現在の保有チップから${cart.filter(i => i.itemType==='chip').reduce((sum, i) => sum + i.price * i.quantity, 0).toLocaleString()}円が自動的に引かれます。`}
+        confirmText="確定する"
+        cancelText="キャンセル"
+        scaleFactor={scaleFactor} // ConfirmationModalにもscaleFactorを渡す (内部でフォントサイズ調整が必要な場合)
+      />
+    </Container>
   );
 };
 

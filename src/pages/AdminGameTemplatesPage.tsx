@@ -5,7 +5,7 @@ import {
   TableContainer, TableHead, TableRow, Paper, IconButton, Dialog,
   DialogTitle, DialogContent, DialogActions, TextField, Switch,
   FormControlLabel, Box, MenuItem, Select, InputLabel, FormControl,
-  Grid
+  Grid, CircularProgress // CircularProgress をインポート
 } from '@mui/material';
 import { Add, Edit, Delete, Loop as LoopIcon } from '@mui/icons-material';
 import { SelectChangeEvent } from '@mui/material/Select';
@@ -19,37 +19,33 @@ import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../components/admin/AdminLayout';
 import { StatusBadge } from '../components/admin/UserDetailsModal';
-// import GameTemplateForm, { GameTemplateFormData } from '../components/admin/GameTemplateForm'; // まだ存在しない
-// import { getAllGameTemplates, addGameTemplate, updateGameTemplate, deleteGameTemplate } from '../services/gameTemplateService'; // まだ存在しない
 
 const gameTemplatesCollectionRef = collection(db, 'gameTemplates');
 
-// ★★★ MUIフォーム要素用の共通スタイル定義 ★★★
 const formComponentStyles = {
-  label: { // InputLabel用
-    color: 'slate.400', // Tailwindのslate-400に近い色
+  label: {
+    color: 'slate.400',
     '&.Mui-focused': {
-      color: 'sky.400',   // フォーカス時のラベル色 (Tailwindのsky-400)
+      color: 'sky.400',
     },
   },
-  inputBase: { // TextFieldのInputPropsやSelectのsx用
-    color: 'neutral.lightest',     // 入力文字の色 (白に近い)
-    backgroundColor: 'slate.700', // 背景色 (Tailwindのslate-700)
+  inputBase: {
+    color: 'neutral.lightest',
+    backgroundColor: 'slate.700',
     '& .MuiOutlinedInput-notchedOutline': {
-      borderColor: 'slate.600', // 通常時のボーダー
+      borderColor: 'slate.600',
     },
     '&:hover .MuiOutlinedInput-notchedOutline': {
-      borderColor: 'slate.500', // ホバー時のボーダー
+      borderColor: 'slate.500',
     },
     '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-      borderColor: 'sky.500',   // フォーカス時のボーダー
+      borderColor: 'sky.500',
     },
-    // Selectのアイコンの色
     '& .MuiSelect-icon': {
         color: 'slate.400',
     }
   },
-  menuPaper: { // Selectのドロップダウンメニュー用
+  menuPaper: {
     bgcolor: 'slate.700',
     color: 'neutral.lightest',
     border: '1px solid',
@@ -58,22 +54,21 @@ const formComponentStyles = {
       backgroundColor: 'slate.600',
     },
   },
-  switchControl: { // Switch用
+  switchControl: {
     '& .MuiSwitch-switchBase.Mui-checked': {
-      color: 'indigo.500', // ONの時の色
+      color: 'indigo.500',
     },
     '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
-      backgroundColor: 'indigo.500', // ONの時のトラックの色
+      backgroundColor: 'indigo.500',
     },
-    // 必要に応じてOFFの時のスタイルも追加
     '& .MuiSwitch-switchBase': {
-        color: 'slate.500', // OFFの時の色
+        color: 'slate.500',
       },
     '& .MuiSwitch-track': {
-        backgroundColor: 'slate.600', // OFFの時のトラックの色
+        backgroundColor: 'slate.600',
     },
   },
-  formControlLabel: { // FormControlLabelのテキスト用
+  formControlLabel: {
     color: 'slate.300',
   }
 };
@@ -208,7 +203,7 @@ const AdminGameTemplatesPage: React.FC = () => {
       if (isEditing && currentTemplate.id) {
         const templateDocRef = doc(db, 'gameTemplates', currentTemplate.id);
         await updateDoc(templateDocRef, {
-          ...(dataToSave as Partial<GameTemplate>), // Firestoreに送るデータ型を調整
+          ...(dataToSave as Partial<GameTemplate>),
           updatedAt: serverTimestamp(),
         });
         alert('ゲームテンプレートを更新しました。');
@@ -284,7 +279,7 @@ const AdminGameTemplatesPage: React.FC = () => {
         </Button>
 
         {error && <Typography color="error" sx={{ mb: 2, p: 2, bgcolor: 'red.900', borderRadius: 1 }}>{error}</Typography>}
-        {loadingData && <Box sx={{ display: 'flex', justifyContent: 'center', my: 5 }}><LoopIcon className="animate-spin text-4xl" /></Box>}
+        {loadingData && <Box sx={{ display: 'flex', justifyContent: 'center', my: 5 }}><CircularProgress sx={{color: 'sky.400'}} /></Box>} {/* ローディングアイコンの色調整 */}
 
         {!loadingData && gameTemplates.length === 0 && !error && (
           <Typography sx={{ py: 5, textAlign: 'center', color: 'slate.400' }}>
@@ -311,7 +306,8 @@ const AdminGameTemplatesPage: React.FC = () => {
               <TableBody>
                 {gameTemplates.map((template) => (
                   <TableRow key={template.id} hover sx={{ '&:hover': { bgcolor: 'slate.700/50' } }}>
-                    <TableCell sx={{ color: 'white', borderBottomColor: 'slate.700' }}>{template.templateName}</TableCell>
+                    {/* ★★★ テンプレート名の文字色を調整 ★★★ */}
+                    <TableCell sx={{ color: 'sky.300', borderBottomColor: 'slate.700', fontWeight: 'medium' }}>{template.templateName}</TableCell>
                     <TableCell sx={{ color: 'slate.200', borderBottomColor: 'slate.700' }}>{template.gameType}</TableCell>
                     <TableCell sx={{ color: 'slate.200', borderBottomColor: 'slate.700' }}>{template.blindsOrRate || '-'}</TableCell>
                     <TableCell sx={{ color: 'slate.200', borderBottomColor: 'slate.700' }}>{template.minPlayers ?? '-'}/{template.maxPlayers ?? '-'}</TableCell>
@@ -326,7 +322,7 @@ const AdminGameTemplatesPage: React.FC = () => {
                         <Edit fontSize="small"/>
                       </IconButton>
                       <IconButton size="small" sx={{color: 'red.400', '&:hover': {color: 'red.300'}}} onClick={() => handleDelete(template.id, template.templateName)} disabled={!!actionLoading[template.id!]}>
-                        {actionLoading[template.id!] ? <LoopIcon className="animate-spin" fontSize="small"/> : <Delete fontSize="small"/>}
+                        {actionLoading[template.id!] ? <CircularProgress size={18} color="inherit" /> : <Delete fontSize="small"/>}
                       </IconButton>
                     </TableCell>
                   </TableRow>
@@ -372,7 +368,7 @@ const AdminGameTemplatesPage: React.FC = () => {
           <DialogActions sx={{ borderTop: 1, borderColor: 'slate.700', pt: 2, pb:2, px:3, bgcolor: 'slate.800' }}>
             <Button onClick={handleCloseDialog} sx={{ color: 'slate.300', '&:hover': { bgcolor: 'slate.700' } }}>キャンセル</Button>
             <Button onClick={handleSubmit} disabled={isFormSubmitting} variant="contained" sx={{ bgcolor: 'indigo.600', '&:hover': { bgcolor: 'indigo.700' } }}>
-              {isFormSubmitting ? <LoopIcon className="animate-spin" /> : (isEditing ? '更新' : '作成')}
+              {isFormSubmitting ? <CircularProgress size={22} color="inherit" /> : (isEditing ? '更新' : '作成')}
             </Button>
           </DialogActions>
         </Dialog>

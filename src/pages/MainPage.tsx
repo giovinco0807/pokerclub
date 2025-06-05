@@ -1,13 +1,15 @@
 // src/pages/MainPage.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAppContext } from '../contexts/AppContext';
-import { UserData, Order, WithdrawalRequest, OrderStatus, WithdrawalRequestStatus, WaitingListEntry, WaitingListEntryWithDetails, GameTemplate } from '../types';
+import { UserData, Order, WithdrawalRequest, OrderStatus, WithdrawalRequestStatus, WaitingListEntry, WaitingListEntryWithDetails, GameTemplate, WaitingListEntryStatus } from '../types';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../services/firebase';
 import { useNavigate, Link } from 'react-router-dom';
 import { createWithdrawalRequest } from '../services/withdrawalService';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, Timestamp, FieldValue, getDocs, orderBy, addDoc, getDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { Checkbox, FormGroup, FormControlLabel, List, ListItem, ListItemText, Collapse, IconButton, ListSubheader, Button as MuiButton, CircularProgress, Box, Alert, Typography, Paper } from '@mui/material';
+import { ExpandLess, ExpandMore } from '@mui/icons-material';
 
 const formatTimestamp = (timestamp?: Timestamp | Date): string => {
   if (!timestamp) return 'N/A';
@@ -47,9 +49,10 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
 
   const [availableGameTemplates, setAvailableGameTemplates] = useState<GameTemplate[]>([]);
   const [userWaitingListEntries, setUserWaitingListEntries] = useState<WaitingListEntryWithDetails[]>([]);
-  const [loadingWaitingList, setLoadingWaitingList] = useState(false);
+  const [loadingWaitingList, setLoadingWaitingList] = useState(true);
   const [waitingListError, setWaitingListError] = useState<string | null>(null);
-  const [selectedGameTemplateId, setSelectedGameTemplateId] = useState<string>('');
+  const [selectedGameTemplateIds, setSelectedGameTemplateIds] = useState<string[]>([]);
+  const [showGameTemplateList, setShowGameTemplateList] = useState(false);
   const [waitingListNotes, setWaitingListNotes] = useState('');
 
   useEffect(() => {
@@ -96,62 +99,70 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
     }
   }, [currentUser?.uid]);
 
-  useEffect(() => {
-    if (currentUser?.uid) {
-      setLoadingWaitingList(true);
-      setWaitingListError(null);
+  const fetchGameTemplatesAndUserEntries = useCallback(async () => {
+    console.log("MainPage: fetchGameTemplatesAndUserEntries called. UID:", currentUser?.uid);
+    if (!currentUser?.uid) {
+      setLoadingWaitingList(false);
+      setUserWaitingListEntries([]);
+      setAvailableGameTemplates([]);
+      return;
+    }
+    setLoadingWaitingList(true);
+    setWaitingListError(null);
 
-      const fetchTemplates = async () => {
-        try {
-          const templatesSnapshot = await getDocs(query(collection(db, "gameTemplates"), where("isActive", "==", true), orderBy("sortOrder", "asc")));
-          const templates = templatesSnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }) as GameTemplate);
-          setAvailableGameTemplates(templates);
-        } catch (err: any) {
-          console.error("利用可能なゲームテンプレート取得エラー:", err);
-          setWaitingListError("ゲームテンプレートの取得に失敗しました。");
-        }
-      };
+    try {
+      const templatesQuery = query(collection(db, "gameTemplates"), where("isActive", "==", true), orderBy("sortOrder", "asc"));
+      const templatesSnapshot = await getDocs(templatesQuery);
+      const activeTemplates = templatesSnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }) as GameTemplate);
+      setAvailableGameTemplates(activeTemplates);
+      console.log("MainPage: Fetched active templates:", activeTemplates.length);
 
-      const fetchUserEntries = async () => {
-        try {
-          // ユーザー自身のウェイティングリストエントリを取得 (statusに関わらず)
-          const entriesQuery = query(
-            collection(db, "waitingListEntries"),
-            where("userId", "==", currentUser.uid),
-            orderBy("requestedAt", "asc")
-          );
-          const entriesSnapshot = await getDocs(entriesQuery);
-          const entriesPromises = entriesSnapshot.docs.map(async (docSnapshot) => {
-            const entryData = { id: docSnapshot.id, ...docSnapshot.data() } as WaitingListEntry;
-            let gameTemplateDetails: GameTemplate | null = null;
-            if (entryData.gameTemplateId) {
+
+      const entriesQuery = query(
+        collection(db, "waitingListEntries"),
+        where("userId", "==", currentUser.uid),
+        orderBy("requestedAt", "asc")
+      );
+      const entriesSnapshot = await getDocs(entriesQuery);
+      console.log("MainPage: Fetched user entries snapshot, docs count:", entriesSnapshot.docs.length);
+
+      const entriesPromises = entriesSnapshot.docs.map(async (docSnapshot) => {
+        const entryData = { id: docSnapshot.id, ...docSnapshot.data() } as WaitingListEntry;
+        let gameTemplateDetails: GameTemplate | null = null;
+        if (entryData.gameTemplateId && activeTemplates.length > 0) {
+            gameTemplateDetails = activeTemplates.find(t => t.id === entryData.gameTemplateId) || null;
+            if (!gameTemplateDetails) {
                 const templateDocSnap = await getDoc(doc(db, 'gameTemplates', entryData.gameTemplateId));
                 if (templateDocSnap.exists()) {
                     gameTemplateDetails = { id: templateDocSnap.id, ...templateDocSnap.data() } as GameTemplate;
                 }
             }
-            return {
-              ...entryData,
-              gameTemplate: gameTemplateDetails || undefined,
-            } as WaitingListEntryWithDetails;
-          });
-          const allUserEntries = await Promise.all(entriesPromises);
-          // クライアント側で表示するステータスをフィルタリング
-          const filteredEntries = allUserEntries.filter(entry =>
-            ["waiting", "called", "confirmed"].includes(entry.status)
-          );
-          setUserWaitingListEntries(filteredEntries);
-        } catch (err: any) {
-          console.error("ユーザーのウェイティングリスト取得エラー:", err); // エラーログの行番号(144)はここ
-          setWaitingListError((prev) => prev ? `${prev}\nウェイティング状況の取得に失敗しました。` : "ウェイティング状況の取得に失敗しました。");
         }
-      };
-
-      Promise.all([fetchTemplates(), fetchUserEntries()]).finally(() => {
-        setLoadingWaitingList(false);
+        return {
+          ...entryData,
+          gameTemplate: gameTemplateDetails || undefined,
+        } as WaitingListEntryWithDetails;
       });
+      const allUserEntries = await Promise.all(entriesPromises);
+      const filteredEntries = allUserEntries.filter(entry =>
+        ["waiting", "called", "confirmed"].includes(entry.status)
+      );
+      setUserWaitingListEntries(filteredEntries);
+      console.log("MainPage: Set userWaitingListEntries:", filteredEntries.length);
+
+    } catch (err: any) {
+      console.error("ユーザーのウェイティングリスト取得エラー:", err); // エラーログの行番号(144)はここ
+      setWaitingListError("ウェイティング状況の取得に失敗しました。");
+    } finally {
+      setLoadingWaitingList(false);
     }
   }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (currentUser?.uid) { // AppContextからcurrentUserがセットされてから実行
+        fetchGameTemplatesAndUserEntries();
+    }
+  }, [currentUser?.uid, fetchGameTemplatesAndUserEntries]); // currentUser.uidも依存配列に追加
 
 
   const handleLogout = async () => {
@@ -266,69 +277,109 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
     }
   };
 
+  const handleGameTemplateSelectionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const templateId = event.target.name;
+    const isChecked = event.target.checked;
+
+    setSelectedGameTemplateIds(prevSelectedIds => {
+      if (isChecked) {
+        return [...prevSelectedIds, templateId];
+      } else {
+        return prevSelectedIds.filter(id => id !== templateId);
+      }
+    });
+  };
+
   const handleJoinWaitingList = async () => {
-    if (!currentUser?.uid || !selectedGameTemplateId) {
-      setWaitingListError("ゲームを選択してください。");
+    if (!currentUser?.uid || selectedGameTemplateIds.length === 0) {
+      setWaitingListError("ウェイティングに参加するゲームを1つ以上選択してください。");
       return;
     }
     setLoadingWaitingList(true);
     setWaitingListError(null);
-    const selectedTemplate = availableGameTemplates.find(t => t.id === selectedGameTemplateId);
     const hidePokerName = currentUser?.firestoreData?.privacySettings?.hidePokerNameInPublicLists || false;
 
-    try {
-      const entryData: Omit<WaitingListEntry, 'id' | 'requestedAt' | 'lastStatusUpdatedAt'> = {
-        userId: currentUser.uid,
-        userPokerNameSnapshot: currentUser.firestoreData?.pokerName || currentUser.email?.split('@')[0],
-        userAvatarUrlSnapshot: currentUser.firestoreData?.avatarUrl || null,
-        gameTemplateId: selectedGameTemplateId,
-        gameTemplateNameSnapshot: selectedTemplate?.templateName,
-        status: 'waiting',
-        notesForStaff: waitingListNotes,
-        isPokerNameHiddenSnapshot: hidePokerName,
-      };
-      const waitingListCollectionRef = collection(db, "waitingListEntries");
-      await addDoc(waitingListCollectionRef, {
-        ...entryData,
-        requestedAt: serverTimestamp(),
-        lastStatusUpdatedAt: serverTimestamp()
-      });
+    let successCount = 0;
+    const errorMessages: string[] = [];
 
-      alert("ウェイティングリストに登録しました。");
-      setSelectedGameTemplateId('');
-      setWaitingListNotes('');
-      // ユーザーのウェイティングリストを再取得 (成功後)
-      const entriesQuery = query(
-        collection(db, "waitingListEntries"),
-        where("userId", "==", currentUser.uid),
-        orderBy("requestedAt", "asc")
+    for (const templateId of selectedGameTemplateIds) {
+      const selectedTemplate = availableGameTemplates.find(t => t.id === templateId);
+      if (!selectedTemplate) {
+        errorMessages.push(`ID: ${templateId} のゲームテンプレートが見つかりません。`);
+        continue;
+      }
+
+      const existingEntry = userWaitingListEntries.find(
+        entry => entry.gameTemplateId === templateId && (entry.status === 'waiting' || entry.status === 'called' || entry.status === 'confirmed')
       );
-      const entriesSnapshot = await getDocs(entriesQuery);
-      const entriesPromises = entriesSnapshot.docs.map(async (docSnapshot) => {
-        const entryData = { id: docSnapshot.id, ...docSnapshot.data() } as WaitingListEntry;
-        let gameTemplateDetails: GameTemplate | null = null;
-        if (entryData.gameTemplateId) {
-            const templateDoc = await getDoc(doc(db, 'gameTemplates', entryData.gameTemplateId));
-            if (templateDoc.exists()) {
-                gameTemplateDetails = { id: templateDoc.id, ...templateDoc.data() } as GameTemplate;
-            }
-        }
-        return {
+      if (existingEntry) {
+        console.log(`${selectedTemplate.templateName} には既にウェイティング登録済みのためスキップします。`);
+        successCount++;
+        continue;
+      }
+
+      try {
+        const entryData: Omit<WaitingListEntry, 'id' | 'requestedAt' | 'lastStatusUpdatedAt'> = {
+          userId: currentUser.uid,
+          userPokerNameSnapshot: currentUser.firestoreData?.pokerName || currentUser.email?.split('@')[0],
+          userAvatarUrlSnapshot: currentUser.firestoreData?.avatarUrl || null,
+          gameTemplateId: templateId,
+          gameTemplateNameSnapshot: selectedTemplate?.templateName,
+          status: 'waiting',
+          notesForStaff: waitingListNotes,
+          isPokerNameHiddenSnapshot: hidePokerName,
+        };
+        const waitingListCollectionRef = collection(db, "waitingListEntries");
+        await addDoc(waitingListCollectionRef, {
           ...entryData,
-          gameTemplate: gameTemplateDetails || undefined,
-        } as WaitingListEntryWithDetails;
-      });
-      const allUserEntries = await Promise.all(entriesPromises);
-      const filteredEntries = allUserEntries.filter(entry =>
-        ["waiting", "called", "confirmed"].includes(entry.status)
-      );
-      setUserWaitingListEntries(filteredEntries);
+          requestedAt: serverTimestamp(),
+          lastStatusUpdatedAt: serverTimestamp()
+        });
+        successCount++;
+      } catch (e: any) {
+        console.error(`ゲーム「${selectedTemplate.templateName}」のウェイティングリスト登録エラー:`, e);
+        errorMessages.push(`「${selectedTemplate.templateName}」の登録に失敗しました: ${e.message}`);
+      }
+    }
 
+    if (successCount > 0) {
+      alert(`${successCount}件のゲームのウェイティングリストに登録しました。${errorMessages.length > 0 ? `\n一部エラー:\n${errorMessages.join('\n')}` : ''}`);
+      fetchGameTemplatesAndUserEntries();
+    } else if (errorMessages.length > 0) {
+      setWaitingListError(`登録に失敗しました:\n${errorMessages.join('\n')}`);
+    }
+
+    setSelectedGameTemplateIds([]);
+    setWaitingListNotes('');
+    // setLoadingWaitingList(false); // fetchGameTemplatesAndUserEntries内でfalseになるので不要
+    setShowGameTemplateList(false);
+  };
+
+  const handleCancelWaitingEntry = async (entryId: string | undefined) => {
+    if (!entryId) {
+      alert("キャンセル対象のエントリーIDが見つかりません。");
+      return;
+    }
+    if (!window.confirm("このウェイティング登録をキャンセルしますか？")) {
+      return;
+    }
+
+    setLoadingWaitingList(true);
+    try {
+      const entryDocRef = doc(db, "waitingListEntries", entryId);
+      await updateDoc(entryDocRef, {
+        status: "cancelled_by_user" as WaitingListEntryStatus,
+        cancelledAt: serverTimestamp(),
+        lastStatusUpdatedAt: serverTimestamp(),
+      });
+      alert("ウェイティング登録をキャンセルしました。");
+      fetchGameTemplatesAndUserEntries();
     } catch (e: any) {
-      console.error("ウェイティングリスト登録エラー:", e);
-      setWaitingListError(`登録に失敗: ${e.message}`);
+      console.error("ウェイティングリストのキャンセルエラー:", e);
+      alert(`キャンセル処理に失敗しました: ${e.message}`);
+      setWaitingListError(`キャンセル処理に失敗: ${e.message}`);
     } finally {
-      setLoadingWaitingList(false);
+      // setLoadingWaitingList(false); // fetchGameTemplatesAndUserEntries内でfalseになる
     }
   };
 
@@ -356,9 +407,13 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
     <div className="min-h-screen bg-slate-900 text-neutral-lightest font-sans p-4 md:p-8">
       <header className="mb-8">
         <div className="flex flex-col sm:flex-row justify-between items-center mb-4">
-          <h1 className="text-3xl font-bold text-red-500 mb-2 sm:mb-0">
-            ようこそ、{displayUserData?.pokerName || currentUser.email?.split('@')[0] || 'プレイヤー'} さん
-          </h1>
+          <Typography variant="h4" component="h1" sx={{ fontWeight: 'bold', color: 'primary.contrastText', mb: { xs: 1, sm: 0 } }}>
+            ようこそ、
+            <Typography component="span" sx={{ color: 'sky.300' }}>
+              {displayUserData?.pokerName || currentUser.email?.split('@')[0] || 'プレイヤー'}
+            </Typography>
+            さん
+          </Typography>
           <div className="flex items-center space-x-3">
             <Link to="/profile" className="text-sky-400 hover:text-sky-300 hover:underline text-sm whitespace-nowrap">
               マイプロフィール
@@ -380,46 +435,52 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
            {pendingConfirmationOrders.map(order => (
             <div key={`confirm-order-${order.id}`} className="mb-3 p-3 bg-slate-700 rounded-md flex flex-col sm:flex-row justify-between items-center gap-2">
               <div>
-                <p className="text-white font-medium">注文(ドリンク等): {order.items.filter(i=>i.itemType==='drink').map(i => i.itemName).join(', ') || "詳細確認中"}</p>
-                <p className="text-xs text-slate-400">合計: {order.totalOrderPrice.toLocaleString()}円 / 提供日時: {formatTimestamp(order.adminDeliveredAt)}</p>
+                <Typography sx={{ color: 'white', fontWeight: 'medium' }}>注文(ドリンク等): {order.items.filter(i=>i.itemType==='drink').map(i => i.itemName).join(', ') || "詳細確認中"}</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'slate.400' }}>合計: {order.totalOrderPrice.toLocaleString()}円 / 提供日時: {formatTimestamp(order.adminDeliveredAt)}</Typography>
               </div>
-              <button
+              <MuiButton
                 onClick={() => order.id && handleUserConfirm(order.id, 'order')}
                 disabled={!order.id || confirmationActionLoading[`order-${order.id!}`]}
-                className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded disabled:opacity-50 whitespace-nowrap"
+                variant="contained"
+                size="small"
+                sx={{bgcolor:'green.600', '&:hover': {bgcolor:'green.700'}}}
               >
-                {confirmationActionLoading[`order-${order.id!}`] ? "処理中..." : "受け取りました"}
-              </button>
+                {confirmationActionLoading[`order-${order.id!}`] ? <CircularProgress size={20} color="inherit"/> : "受け取りました"}
+              </MuiButton>
             </div>
           ))}
           {pendingConfirmationWithdrawals.map(withdrawal => (
             <div key={`confirm-withdrawal-${withdrawal.id}`} className="mb-3 p-3 bg-slate-700 rounded-md flex flex-col sm:flex-row justify-between items-center gap-2">
               <div>
-                <p className="text-white font-medium">チップ引き出し: {withdrawal.requestedChipsAmount.toLocaleString()} チップ</p>
-                <p className="text-xs text-slate-400">ステータス: {withdrawal.status} / 提供日時(管理): {formatTimestamp(withdrawal.adminDeliveredAt)}</p>
+                <Typography sx={{ color: 'white', fontWeight: 'medium' }}>チップ引き出し: {withdrawal.requestedChipsAmount.toLocaleString()} チップ</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'slate.400' }}>ステータス: {withdrawal.status} / 提供日時(管理): {formatTimestamp(withdrawal.adminDeliveredAt)}</Typography>
               </div>
-              <button
+              <MuiButton
                 onClick={() => withdrawal.id && handleUserConfirm(withdrawal.id, 'withdrawal')}
                 disabled={!withdrawal.id || confirmationActionLoading[`withdrawal-${withdrawal.id!}`]}
-                className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded disabled:opacity-50 whitespace-nowrap"
+                variant="contained"
+                size="small"
+                sx={{bgcolor:'green.600', '&:hover': {bgcolor:'green.700'}}}
               >
-                {confirmationActionLoading[`withdrawal-${withdrawal.id!}`] ? "処理中..." : "チップ受け取りました"}
-              </button>
+                {confirmationActionLoading[`withdrawal-${withdrawal.id!}`] ? <CircularProgress size={20} color="inherit"/> : "チップ受け取り"}
+              </MuiButton>
             </div>
           ))}
           {displayUserData?.pendingChipSettlement && (
             <div key={`confirm-settlement-${currentUser!.uid}`} className="mb-3 p-3 bg-slate-700 rounded-md flex flex-col sm:flex-row justify-between items-center gap-2">
               <div>
-                <p className="text-white font-medium">テーブルチップ精算: {displayUserData.pendingChipSettlement.adminEnteredTotalChips.toLocaleString()} チップ</p>
-                <p className="text-xs text-slate-400">テーブル: T{displayUserData.pendingChipSettlement.tableId} - S{displayUserData.pendingChipSettlement.seatNumber} / 受付日時: {formatTimestamp(displayUserData.pendingChipSettlement.initiatedAt)}</p>
+                <Typography sx={{ color: 'white', fontWeight: 'medium' }}>テーブルチップ精算: {displayUserData.pendingChipSettlement.adminEnteredTotalChips.toLocaleString()} チップ</Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: 'slate.400' }}>テーブル: T{displayUserData.pendingChipSettlement.tableId} - S{displayUserData.pendingChipSettlement.seatNumber} / 受付日時: {formatTimestamp(displayUserData.pendingChipSettlement.initiatedAt)}</Typography>
               </div>
-               <button
+               <MuiButton
                 onClick={() => handleUserConfirm(currentUser!.uid, 'chip_settlement')}
                 disabled={confirmationActionLoading[`settlement-${currentUser!.uid}`]}
-                className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded disabled:opacity-50 whitespace-nowrap"
+                variant="contained"
+                size="small"
+                sx={{bgcolor:'green.600', '&:hover': {bgcolor:'green.700'}}}
               >
-                {confirmationActionLoading[`settlement-${currentUser!.uid}`] ? "処理中..." : "精算内容を確認しました"}
-              </button>
+                {confirmationActionLoading[`settlement-${currentUser!.uid}`] ? <CircularProgress size={20} color="inherit"/> : "精算内容確認"}
+              </MuiButton>
             </div>
           )}
         </section>
@@ -429,7 +490,7 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
         <section className="md:col-span-2 bg-slate-800 p-6 rounded-lg shadow">
            <h2 className="text-2xl font-semibold text-red-400 mb-4 border-b border-slate-700 pb-2">プレイヤー情報</h2>
            <div className="space-y-3 text-lg mb-6">
-            <p><span className="font-medium text-slate-400">ポーカーネーム:</span> {displayUserData?.pokerName || '未設定'}</p>
+            <p><span className="font-medium text-slate-400">ポーカーネーム:</span> <Typography component="span" sx={{ color: 'sky.300', fontWeight: 'medium' }}>{displayUserData?.pokerName || '未設定'}</Typography></p>
             <p><span className="font-medium text-slate-400">現在の保有チップ:</span> <span className="font-bold text-amber-300">{(displayUserData?.chips ?? 0).toLocaleString()}</span> チップ</p>
             {displayUserData && typeof displayUserData.chipsInPlay === 'number' && displayUserData.chipsInPlay > 0 && (
                  <p><span className="font-medium text-slate-400">テーブル使用中チップ:</span> <span className="font-semibold text-sky-300">{displayUserData.chipsInPlay.toLocaleString()}</span> チップ</p>
@@ -491,84 +552,131 @@ const MainPage: React.FC<{ isStaffMode: boolean }> = ({ isStaffMode }) => {
       </div>
 
       <section className="mb-8 bg-slate-800 p-6 rounded-lg shadow-xl">
-        <h2 className="text-2xl font-semibold text-teal-400 mb-4 border-b border-slate-700 pb-2">ウェイティングリスト</h2>
-        {loadingWaitingList ? (
-          <p className="text-slate-300">ウェイティング情報を読み込み中...</p>
+        <h2 className="text-2xl font-semibold text-teal-400 mb-4 border-b border-slate-700 pb-2">ウェイティングリストに参加</h2>
+        {loadingWaitingList && !appContextLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+            <CircularProgress color="inherit" />
+            <Typography sx={{ ml: 2 }}>処理中...</Typography>
+          </Box>
         ) : waitingListError ? (
-          <p className="text-yellow-400 bg-yellow-900/30 p-3 rounded">{waitingListError}</p>
-        ) : (
-          <>
-            {userWaitingListEntries.length > 0 && (
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold text-slate-200 mb-2">現在のあなたの待ち状況:</h3>
-                <ul className="space-y-2">
-                  {userWaitingListEntries.map((entry: WaitingListEntryWithDetails) => (
-                    <li key={entry.id} className="p-3 bg-slate-700 rounded-md">
-                      <p className="text-white font-medium">
-                        {entry.gameTemplateNameSnapshot || entry.gameTemplate?.templateName || '不明なゲーム'}
-                        <span className={`ml-2 px-2 py-0.5 text-xs rounded-full ${
-                          entry.status === 'waiting' ? 'bg-yellow-500 text-black' :
-                          entry.status === 'called' ? 'bg-sky-500 text-white' :
-                          entry.status === 'confirmed' ? 'bg-blue-500 text-white' :
-                          'bg-slate-600 text-slate-200'
-                        }`}>
-                          {entry.status}
-                        </span>
-                      </p>
-                      <p className="text-xs text-slate-400">受付: {formatTimestamp(entry.requestedAt)}</p>
-                      {entry.notesForStaff && <p className="text-xs text-slate-400 mt-1">備考: {entry.notesForStaff}</p>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+          <Alert severity="error" sx={{ mb: 2 }}>{waitingListError}</Alert>
+        ) : null}
 
-            <div className="space-y-3">
-              <div>
-                <label htmlFor="gameTemplateSelect" className="block text-sm font-medium text-slate-300 mb-1">
-                  参加希望ゲーム:
-                </label>
-                <select
-                  id="gameTemplateSelect"
-                  value={selectedGameTemplateId}
-                  onChange={(e) => setSelectedGameTemplateId(e.target.value)}
-                  className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-teal-500 focus:border-teal-500"
-                  disabled={loadingWaitingList}
-                >
-                  <option value="">-- ゲームを選択してください --</option>
-                  {availableGameTemplates.map((template: GameTemplate) => (
-                    <option key={template.id} value={template.id!}>
-                      {template.templateName} ({template.gameType} - {template.blindsOrRate || 'N/A'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="waitingListNotes" className="block text-sm font-medium text-slate-300 mb-1">
-                  スタッフへの備考 (任意):
-                </label>
-                <textarea
-                  id="waitingListNotes"
-                  value={waitingListNotes}
-                  onChange={(e) => setWaitingListNotes(e.target.value)}
-                  rows={2}
-                  className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-teal-500 focus:border-teal-500"
-                  placeholder="例: 友人と同卓希望、あと30分ほどで到着予定など"
-                  disabled={loadingWaitingList}
-                />
-              </div>
-              <button
-                onClick={handleJoinWaitingList}
-                disabled={loadingWaitingList || !selectedGameTemplateId}
-                className={`w-full sm:w-auto px-6 py-2 font-semibold rounded-lg transition-colors
-                  ${loadingWaitingList || !selectedGameTemplateId
-                    ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                    : 'bg-teal-600 hover:bg-teal-700 text-white shadow-md'}`}
-              >
-                {loadingWaitingList ? '処理中...' : 'ウェイティングリストに参加'}
-              </button>
-            </div>
-          </>
+        <div className="space-y-4">
+          <div>
+            <MuiButton
+                onClick={() => setShowGameTemplateList(!showGameTemplateList)}
+                fullWidth
+                variant="outlined"
+                sx={{
+                    color: 'sky.400',
+                    borderColor: 'sky.600',
+                    '&:hover': { borderColor: 'sky.400', bgcolor: 'sky.900/30' },
+                    justifyContent: 'space-between',
+                    textTransform: 'none',
+                    py: 1.5,
+                }}
+                endIcon={showGameTemplateList ? <ExpandLess /> : <ExpandMore />}
+            >
+                参加希望ゲームを選択 (複数選択可)
+            </MuiButton>
+            <Collapse in={showGameTemplateList} timeout="auto" unmountOnExit>
+                <Paper sx={{ maxHeight: 300, overflow: 'auto', mt: 1, bgcolor: 'slate.700/50', p:1, border: '1px solid', borderColor: 'slate.600' }}>
+                    <FormGroup>
+                    {availableGameTemplates.length > 0 ? availableGameTemplates.map((template) => (
+                        <FormControlLabel
+                        key={template.id}
+                        control={
+                            <Checkbox
+                            checked={selectedGameTemplateIds.includes(template.id!)}
+                            onChange={handleGameTemplateSelectionChange}
+                            name={template.id!}
+                            sx={{ color: 'sky.400', '&.Mui-checked': { color: 'sky.300' } }}
+                            />
+                        }
+                        label={`${template.templateName} (${template.gameType} - ${template.blindsOrRate || 'N/A'})`}
+                        sx={{ color: 'slate.200', borderBottom: '1px solid', borderColor: 'slate.600/70', '&:last-child': { borderBottom: 'none'}, py: 0.5, px:1, '&:hover': {bgcolor: 'slate.600/50'} }}
+                        />
+                    )) : (
+                        <Typography sx={{p:2, textAlign:'center', color:'slate.400'}}>現在参加可能なゲームテンプレートはありません。</Typography>
+                    )}
+                    </FormGroup>
+                </Paper>
+            </Collapse>
+          </div>
+
+          <div>
+            <label htmlFor="waitingListNotes" className="block text-sm font-medium text-slate-300 mb-1">
+              スタッフへの備考 (全ゲーム共通・任意):
+            </label>
+            <textarea
+              id="waitingListNotes"
+              value={waitingListNotes}
+              onChange={(e) => setWaitingListNotes(e.target.value)}
+              rows={2}
+              className="w-full p-2 bg-slate-700 text-white border border-slate-600 rounded focus:ring-teal-500 focus:border-teal-500"
+              placeholder="例: 友人と同卓希望、あと30分ほどで到着予定など"
+              disabled={loadingWaitingList}
+            />
+          </div>
+          <MuiButton
+            onClick={handleJoinWaitingList}
+            disabled={loadingWaitingList || selectedGameTemplateIds.length === 0}
+            variant="contained"
+            fullWidth
+            sx={{
+              py: 1.5,
+              bgcolor: (loadingWaitingList || selectedGameTemplateIds.length === 0) ? 'slate.600' : 'teal.600',
+              '&:hover': { bgcolor: (loadingWaitingList || selectedGameTemplateIds.length === 0) ? 'slate.600' : 'teal.700' },
+              color: 'white',
+              fontWeight: 'bold'
+            }}
+          >
+            {loadingWaitingList ? '登録処理中...' : `${selectedGameTemplateIds.length}件のゲームにウェイティング登録する`}
+          </MuiButton>
+        </div>
+
+        {userWaitingListEntries.length > 0 && (
+          <div className="mt-8 pt-6 border-t border-slate-700">
+            <h3 className="text-lg font-semibold text-slate-200 mb-3">現在のあなたの待ち状況:</h3>
+            <ul className="space-y-2">
+              {userWaitingListEntries.map((entry: WaitingListEntryWithDetails) => (
+                <li key={entry.id} className="p-3 bg-slate-700 rounded-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                  <div>
+                    <Typography sx={{ color: 'sky.200', fontWeight: 'medium' }}>
+                      {entry.gameTemplateNameSnapshot || entry.gameTemplate?.templateName || '不明なゲーム'}
+                      <span className={`ml-2 px-2 py-0.5 text-xs rounded-full ${
+                        entry.status === 'waiting' ? 'bg-yellow-500 text-black' :
+                        entry.status === 'called' ? 'bg-sky-500 text-white' :
+                        entry.status === 'confirmed' ? 'bg-blue-500 text-white' :
+                        'bg-slate-600 text-slate-200'
+                      }`}>
+                        {entry.status}
+                      </span>
+                    </Typography>
+                    {entry.notesForStaff && <p className="text-xs text-slate-400 mt-1">備考: {entry.notesForStaff}</p>}
+                  </div>
+                  {(entry.status === 'waiting' || entry.status === 'called' || entry.status === 'confirmed') && (
+                    <MuiButton
+                      variant="outlined"
+                      size="small"
+                      onClick={() => handleCancelWaitingEntry(entry.id)}
+                      sx={{
+                        color: 'red.400',
+                        borderColor: 'red.600',
+                        '&:hover': { borderColor: 'red.400', bgcolor: 'red.900/30' },
+                        mt: { xs: 1, sm: 0 },
+                        alignSelf: { xs: 'flex-end', sm: 'center'}
+                      }}
+                      disabled={loadingWaitingList}
+                    >
+                      キャンセル
+                    </MuiButton>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 
