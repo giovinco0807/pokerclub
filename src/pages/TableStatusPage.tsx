@@ -1,160 +1,142 @@
 // src/pages/TableStatusPage.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { db } from '../services/firebase';
-// doc をインポートリストに追加
-import { collection, query, orderBy, onSnapshot, Timestamp, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, getDocs, doc, getDoc } from 'firebase/firestore'; // getDocを追加
 import { useAppContext } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
-import { Table, Seat, GameTemplate } from '../types';
+import { GameName, Table as PokerTable, Seat, UserData } from '../types';
+import PokerTableSVG from '../components/common/PokerTableSVG'; // 作成したコンポーネントをインポート
+import PlayerInfoPopover from '../components/common/PlayerInfoPopover'; // 作成したポップオーバーをインポート
+import AdminLayout from '../components/admin/AdminLayout';
+import { Typography, Container, Grid, CircularProgress, Alert } from '@mui/material';
 
 const TableStatusPage: React.FC = () => {
-  const { currentUser, loading: appContextLoading } = useAppContext();
-  const [tables, setTables] = useState<Table[]>([]);
-  const [loadingTables, setLoadingTables] = useState(true);
+  const { currentUser } = useAppContext();
+  const [tables, setTables] = useState<PokerTable[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [gameTemplatesMap, setGameTemplatesMap] = useState<Map<string, GameTemplate | null>>(new Map());
 
-  const fetchTableData = useCallback(() => {
-    setLoadingTables(true);
-    setError(null);
-
-    const tablesCollectionRef = collection(db, 'tables');
-    const qTables = query(tablesCollectionRef, orderBy('name'));
-
-    const unsubscribe = onSnapshot(qTables, async (tablesSnapshot) => {
-      const tablesDataPromises = tablesSnapshot.docs.map(async (tableDocSnapshot) => { // 変数名を変更
-        const tableData = { id: tableDocSnapshot.id, ...tableDocSnapshot.data() } as Omit<Table, 'seats' | 'gameTemplate'>;
-        const seatsCollectionRef = collection(db, 'tables', tableDocSnapshot.id, 'seats');
-        const seatsQuery = query(seatsCollectionRef, orderBy('seatNumber'));
-        const seatsSnapshot = await getDocs(seatsQuery);
-        const seats = seatsSnapshot.docs.map(seatDoc => ({ id: seatDoc.id, ...seatDoc.data() } as Seat));
-
-        let gameTemplate: GameTemplate | null = null;
-        if (tableData.currentGameTemplateId) {
-          try {
-            // getDoc と doc を正しく使用
-            const templateDoc = await getDoc(doc(db, 'gameTemplates', tableData.currentGameTemplateId));
-            if (templateDoc.exists()) {
-              gameTemplate = { id: templateDoc.id, ...templateDoc.data() } as GameTemplate;
-            }
-          } catch (templateError) {
-            console.warn(`Error fetching game template ${tableData.currentGameTemplateId} for table ${tableData.id}:`, templateError);
-          }
-        }
-        return { ...tableData, seats, gameTemplate };
-      });
-      try {
-        const resolvedTablesData = await Promise.all(tablesDataPromises);
-        setTables(resolvedTablesData);
-
-        const newTemplatesMap = new Map<string, GameTemplate | null>();
-        resolvedTablesData.forEach(table => {
-          if (table.currentGameTemplateId && table.gameTemplate) {
-            newTemplatesMap.set(table.currentGameTemplateId, table.gameTemplate);
-          }
-        });
-        setGameTemplatesMap(newTemplatesMap);
-
-      } catch (err: any) {
-        console.error("卓状況の座席データ取得エラー:", err);
-        setError("座席情報の取得中にエラーが発生しました。");
-      } finally {
-        setLoadingTables(false);
-      }
-    }, (err) => {
-      console.error("卓状況のテーブルデータ取得エラー:", err);
-      setError("テーブル情報の取得に失敗しました。");
-      setLoadingTables(false);
-    });
-
-    return unsubscribe;
-  }, []);
-
+  const [selectedPlayer, setSelectedPlayer] = useState<Partial<UserData> | null>(null);
+  // ★★★ popoverAnchorEl の型を Element | null に変更 ★★★
+  const [popoverAnchorEl, setPopoverAnchorEl] = useState<Element | null>(null);
 
   useEffect(() => {
-    if (!appContextLoading && currentUser) {
-        const unsubscribe = fetchTableData();
-        return () => {
-            unsubscribe();
-        };
-    } else if (!appContextLoading && !currentUser) {
-        setError("テーブル状況を見るにはログインしてください。");
-        setLoadingTables(false);
+    const q = query(collection(db, 'tables'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      setLoading(true);
+      try {
+        const tablesDataPromises = snapshot.docs.map(async (tableDoc) => {
+          const tableData = { id: tableDoc.id, ...tableDoc.data() } as PokerTable;
+          const seatsCollectionRef = collection(db, 'tables', tableDoc.id, 'seats');
+          const seatsSnapshot = await getDocs(query(seatsCollectionRef, orderBy('seatNumber', 'asc')));
+          tableData.seats = seatsSnapshot.docs.map(seatDoc => ({ id: seatDoc.id, ...seatDoc.data() } as Seat));
+          return tableData;
+        });
+        const resolvedTables = await Promise.all(tablesDataPromises);
+        setTables(resolvedTables);
+        setError(null);
+      } catch (err: any) {
+        console.error("Error fetching table statuses:", err);
+        setError("テーブル情報の取得に失敗しました。");
+      } finally {
+        setLoading(false);
+      }
+    }, (err) => {
+      console.error("Snapshot error for table statuses:", err);
+      setError("テーブル情報のリアルタイム更新中にエラーが発生しました。");
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ★★★ handleSeatClick の第3引数の型を Element | null に変更 ★★★
+  const handleSeatClick = async (seatNumber: number, userId: string | null, anchorElement: Element | null) => {
+    if (userId && anchorElement) { // anchorElement が null でないことも確認
+      try {
+        const userDocRef = doc(db, 'users', userId);
+        const userSnap = await getDoc(userDocRef);
+        if (userSnap.exists()) {
+          const userData = userSnap.data() as UserData;
+          setSelectedPlayer({
+            pokerName: userData.pokerName,
+            chips: userData.chips,
+          });
+          setPopoverAnchorEl(anchorElement); // ★ anchorElement をそのままセット
+        } else {
+          console.warn(`User document not found for userId: ${userId}`);
+          setSelectedPlayer({ pokerName: '(情報なし)' });
+          setPopoverAnchorEl(anchorElement);
+        }
+      } catch (err) {
+        console.error("Error fetching user data for popover:", err);
+        setSelectedPlayer({ pokerName: '(エラー)' });
+        setPopoverAnchorEl(anchorElement);
+      }
+    } else {
+      console.log(`Seat ${seatNumber} is empty.`);
+      setSelectedPlayer(null);
+      setPopoverAnchorEl(null);
     }
-  }, [appContextLoading, currentUser, fetchTableData]);
+  };
+
+  const handleClosePopover = () => {
+    setSelectedPlayer(null);
+    setPopoverAnchorEl(null);
+  };
 
 
-  if (appContextLoading || loadingTables) {
-    return <div className="text-center p-10 text-xl text-neutral-lightest">テーブル情報を読み込み中...</div>;
+  if (loading && tables.length === 0) {
+    return (
+      <Container sx={{ py: 4, display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
+        <CircularProgress />
+      </Container>
+    );
   }
 
   if (error) {
-    return <div className="text-center p-10 text-xl text-red-400 bg-red-900/30 rounded-md">{error}</div>;
-  }
-
-  if (!currentUser) {
-    return <div className="text-center p-10 text-xl text-yellow-400">ログインが必要です。</div>;
+    return (
+      <Container sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
+      </Container>
+    );
   }
 
   return (
-    <div className="container mx-auto p-4 sm:p-6 lg:p-8 text-neutral-lightest">
-      <div className="flex justify-between items-center mb-8 pb-3 border-b border-slate-700">
-        <h1 className="text-3xl font-bold text-sky-400">現在の卓状況</h1>
-        <Link to="/" className="text-red-400 hover:text-red-300 hover:underline text-sm">
-          ← メインページに戻る
-        </Link>
-      </div>
-
-      {tables.length === 0 && !loadingTables && (
-        <p className="text-slate-400 text-center py-10">現在稼働中のテーブルはありません。</p>
+    // AdminLayout を使うか、通常のレイアウトにするか選択
+    // <AdminLayout>
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Typography variant="h4" component="h1" gutterBottom sx={{ color: 'primary.main', textAlign: 'center', mb:4 }}>
+        テーブル状況
+      </Typography>
+      {tables.length === 0 && !loading && (
+        <Typography sx={{ textAlign: 'center', color: 'text.secondary', mt: 5 }}>
+          現在利用可能なテーブルはありません。
+        </Typography>
       )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {tables.filter(table => table.status !== 'inactive').map(table => {
-          const templateInfo = table.currentGameTemplateId ? gameTemplatesMap.get(table.currentGameTemplateId) : null;
-          const displayGameType = templateInfo ? templateInfo.gameType : table.gameType;
-          const displayBlindsOrRate = templateInfo ? templateInfo.blindsOrRate : table.blindsOrRate;
-
-          return (
-            <div key={table.id} className="bg-slate-800 p-5 rounded-lg shadow-lg">
-              <h2 className="text-2xl font-semibold text-amber-400 mb-3">{table.name}</h2>
-              <p className="text-sm text-slate-400 mb-1">
-                ゲーム: {displayGameType || '未設定'}
-                {displayBlindsOrRate && ` (${displayBlindsOrRate})`}
-              </p>
-              <p className="text-sm text-slate-400 mb-4">状態:
-                <span className={`ml-2 px-2 py-0.5 text-xs font-semibold rounded-full
-                  ${table.status === 'active' ? 'bg-green-600 text-green-100' :
-                    table.status === 'full' ? 'bg-red-600 text-red-100' : 'bg-slate-600 text-slate-100'}`}>
-                  {table.status === 'active' ? 'プレイヤー募集中' : table.status === 'full' ? '満席' : table.status || '不明'}
-                </span>
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                {Array.from({ length: table.maxSeats || 0 }, (_, i) => i + 1).map(seatNum => {
-                  const seat = table.seats?.find(s => s.seatNumber === seatNum);
-                  const isOccupied = seat && seat.userId;
-                  return (
-                    <div
-                      key={seatNum}
-                      className={`p-3 rounded border h-20 flex flex-col items-center justify-center text-center
-                        ${isOccupied ? 'bg-red-700/30 border-red-600' : 'bg-green-700/20 border-green-600'}`}
-                      title={isOccupied ? `Seat ${seatNum}: ${seat.userPokerName || '不明'}` : `Seat ${seatNum}: 空席`}
-                    >
-                      <p className="font-semibold text-lg">S{seatNum}</p>
-                      {isOccupied ? (
-                        <p className="text-xs text-red-200 truncate w-full">{seat.userPokerName || 'プレイヤー'}</p>
-                      ) : (
-                        <p className="text-xs text-green-300">(空席)</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+      <Grid container spacing={4} justifyContent="center">
+        {tables.map((table) => (
+          <Grid item xs={12} lg={6} key={table.id}>
+            <PokerTableSVG
+              seats={table.seats || []}
+              maxSeats={table.maxSeats}
+              tableName={table.name}
+              gameType={table.gameType as GameName} // types.tsからインポートした型を使用
+              blindsOrRate={table.blindsOrRate}
+              // ★★★ onSeatClick に渡す関数の引数を修正 ★★★
+              onSeatClick={(seatNumber, uId, eventTarget) => handleSeatClick(seatNumber, uId, eventTarget as Element | null)}
+            />
+          </Grid>
+        ))}
+      </Grid>
+      <PlayerInfoPopover
+        isOpen={!!selectedPlayer}
+        onClose={handleClosePopover}
+        playerData={selectedPlayer}
+        anchorEl={popoverAnchorEl as HTMLElement | null} // ★ Popover側がHTMLElementを期待する場合はアサーション
+      />
+    </Container>
+    // </AdminLayout>
   );
 };
 

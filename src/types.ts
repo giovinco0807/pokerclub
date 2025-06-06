@@ -207,7 +207,7 @@ export interface SeatData {
   userId: string | null;
   userPokerName: string | null;
   occupiedAt?: Timestamp | null;
-  status?: "occupied" | "empty" | "reserved"; // "reserved" も追加
+  status?: "occupied" | "empty" | "reserved" | "occupied_by_staff"; // "reserved" も追加
   currentStack?: number;
 }
 export interface Seat extends SeatData {
